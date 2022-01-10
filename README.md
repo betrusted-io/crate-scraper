@@ -1,5 +1,9 @@
 # crate-scraper
 
+This script depends on:
+- [`cargo-download`](https://github.com/Xion/cargo-download)
+- A Debian/Ubuntu Linux flavored `tar` command
+
 This is a script that scrapes all the crates based on crates.io inside a Cargo.lock
 file and stores them locally. It also can perform a quick "analysis" which simply
 looks for all the `build.rs` scripts and collates them into a single file for
