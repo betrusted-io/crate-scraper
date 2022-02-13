@@ -121,6 +121,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "ball"
+version = "0.1.0"
+dependencies = [
+ "com",
+ "gam",
+ "locales",
+ "log",
+ "log-server",
+ "modals",
+ "num-derive",
+ "num-traits",
+ "ticktimer-server",
+ "trng",
+ "xous",
+ "xous-ipc",
+ "xous-names",
+]
+
+[[package]]
+name = "bare-metal"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3caf393d93b2d453e80638d0674597020cef3382ada454faacd43d1a55a735a"
+dependencies = [
+ "rustc_version 0.2.3",
+]
+
+[[package]]
 name = "base64"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,7 +159,6 @@ name = "benchmark"
 version = "0.1.0"
 dependencies = [
  "benchmark-target",
- "blitstr-ref",
  "graphics-server",
  "log",
  "log-server",
@@ -184,6 +211,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit_field"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed8765909f9009617974ab6b7d332625b320b33c326b1e9321382ef1999b5d56"
+
+[[package]]
 name = "bitfield"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -191,25 +224,9 @@ checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
 name = "bitflags"
-version = "1.2.1"
+version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
-
-[[package]]
-name = "blitstr"
-version = "0.5.0"
-source = "git+https://github.com/betrusted-io/blitstr.git?rev=89675bf468fa51baaf0de94e806b85c92466ae64#89675bf468fa51baaf0de94e806b85c92466ae64"
-dependencies = [
- "log",
- "rkyv",
-]
-
-[[package]]
-name = "blitstr-ref"
-version = "0.1.0"
-dependencies = [
- "blitstr",
-]
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "block-buffer"
@@ -257,9 +274,9 @@ checksum = "9c59e7af012c713f529e7a3ee57ce9b31ddd858d4b512923602f74608b009631"
 
 [[package]]
 name = "byteorder"
-version = "1.4.2"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae44d1a3d5a19df61dd0c8beb138458ac2a53a7ac09eba97d55592540004306b"
+checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bzip2"
@@ -441,6 +458,7 @@ name = "com"
 version = "0.1.0"
 dependencies = [
  "com_rs-ref",
+ "llio",
  "log",
  "log-server",
  "num-derive",
@@ -459,7 +477,7 @@ dependencies = [
 [[package]]
 name = "com_rs"
 version = "0.1.0"
-source = "git+https://github.com/betrusted-io/com_rs.git?rev=b3bf4aebe1d3c91e77dae5d3832d17e717c5669b#b3bf4aebe1d3c91e77dae5d3832d17e717c5669b"
+source = "git+https://github.com/betrusted-io/com_rs.git?rev=5e3c741369ae2c1a537b41b70bdfd40d1b62e06d#5e3c741369ae2c1a537b41b70bdfd40d1b62e06d"
 
 [[package]]
 name = "com_rs-ref"
@@ -519,6 +537,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81156fece84ab6a9f2afdb109ce3ae577e42b1228441eded99bd77f627953b1a"
 dependencies = [
  "cfg-if 1.0.0",
+]
+
+[[package]]
+name = "crossbeam-channel"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e54ea8bc3fb1ee042f5aace6e3c6e025d3874866da222930f70ce62aceba0bfa"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfcae03edb34f947e64acdb1c33ec169824e20657e9ecb61cef6c8c74dcb8120"
+dependencies = [
+ "cfg-if 1.0.0",
+ "lazy_static",
 ]
 
 [[package]]
@@ -599,7 +637,7 @@ dependencies = [
  "byteorder",
  "digest",
  "engine-25519",
- "engine25519-as",
+ "engine25519-as 0.1.0 (git+https://github.com/betrusted-io/engine25519-as.git?rev=6681e73c1fdc4a460b5ef9f9c7c91aef546d00f3)",
  "log",
  "rand_core 0.5.1",
  "subtle",
@@ -720,7 +758,7 @@ dependencies = [
 name = "engine-25519"
 version = "0.1.0"
 dependencies = [
- "engine25519-as",
+ "engine25519-as 0.1.0 (git+https://github.com/betrusted-io/engine25519-as.git?rev=274b82899d28535ac6d4b7869e26eef2039578d5)",
  "llio",
  "log",
  "log-server",
@@ -734,6 +772,11 @@ dependencies = [
  "xous-ipc",
  "xous-names",
 ]
+
+[[package]]
+name = "engine25519-as"
+version = "0.1.0"
+source = "git+https://github.com/betrusted-io/engine25519-as.git?rev=274b82899d28535ac6d4b7869e26eef2039578d5#274b82899d28535ac6d4b7869e26eef2039578d5"
 
 [[package]]
 name = "engine25519-as"
@@ -840,7 +883,6 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 name = "gam"
 version = "0.1.0"
 dependencies = [
- "blitstr-ref",
  "com",
  "content-plugin-api",
  "enum_dispatch",
@@ -861,6 +903,28 @@ dependencies = [
  "xous",
  "xous-ipc",
  "xous-names",
+]
+
+[[package]]
+name = "gdbstub"
+version = "0.5.0"
+source = "git+https://github.com/daniel5151/gdbstub.git?rev=9227dfd0b78db5b20859d13c890f6f47e597029e#9227dfd0b78db5b20859d13c890f6f47e597029e"
+dependencies = [
+ "bitflags",
+ "cfg-if 0.1.10",
+ "log",
+ "managed",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "gdbstub_arch"
+version = "0.1.0"
+source = "git+https://github.com/daniel5151/gdbstub.git?rev=9227dfd0b78db5b20859d13c890f6f47e597029e#9227dfd0b78db5b20859d13c890f6f47e597029e"
+dependencies = [
+ "gdbstub",
+ "num-traits",
 ]
 
 [[package]]
@@ -911,7 +975,6 @@ checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 name = "graphics-server"
 version = "0.1.0"
 dependencies = [
- "blitstr-ref",
  "keyboard",
  "log",
  "log-server",
@@ -974,7 +1037,6 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 name = "ime-frontend"
 version = "0.1.0"
 dependencies = [
- "blitstr-ref",
  "gam",
  "graphics-server",
  "ime-plugin-api",
@@ -1062,6 +1124,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel"
+version = "0.8.2"
+dependencies = [
+ "bitflags",
+ "crossbeam-channel",
+ "debug-here",
+ "gdbstub",
+ "gdbstub_arch",
+ "hex",
+ "lazy_static",
+ "rand 0.7.3",
+ "rand_chacha 0.3.1",
+ "riscv",
+ "stats_alloc",
+ "utralib",
+ "xous",
+]
+
+[[package]]
 name = "kernel-test"
 version = "0.1.0"
 dependencies = [
@@ -1082,6 +1163,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "rkyv",
+ "spinor",
  "susres",
  "ticktimer-server",
  "utralib",
@@ -1104,9 +1186,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.106"
+version = "0.2.113"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a60553f9a9e039a333b4e9b20573b9e9b9c0bb3a11e201ccc48ef4283456d673"
+checksum = "eef78b64d87775463c549fbd80e19249ef436ea3bf1de2a1eb7e717ec7fab1e9"
 
 [[package]]
 name = "libloading"
@@ -1140,6 +1222,9 @@ dependencies = [
 name = "llio"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "chrono",
+ "locales",
  "log",
  "log-server",
  "num-derive",
@@ -1182,7 +1267,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "utralib",
- "vergen",
  "xous",
  "xous-ipc",
 ]
@@ -1192,12 +1276,6 @@ name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
-
-[[package]]
-name = "maybe-uninit"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "memchr"
@@ -1227,7 +1305,7 @@ dependencies = [
 [[package]]
 name = "minifb"
 version = "0.19.3"
-source = "git+https://github.com/xobs/rust_minifb.git?rev=ea25c2e4843abd130d6794b2045812907a24eab2#ea25c2e4843abd130d6794b2045812907a24eab2"
+source = "git+https://github.com/betrusted-io/rust_minifb.git?rev=1717ec60830c1f9592b77ce875e492afef1aa533#1717ec60830c1f9592b77ce875e492afef1aa533"
 dependencies = [
  "cc",
  "orbclient",
@@ -1276,9 +1354,12 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "com",
+ "com_rs-ref",
  "llio",
+ "locales",
  "log",
  "log-server",
+ "modals",
  "num-derive",
  "num-traits",
  "pddb",
@@ -1402,25 +1483,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oqc-test"
-version = "0.1.0"
-dependencies = [
- "com",
- "gam",
- "keyboard",
- "llio",
- "log",
- "log-server",
- "num-derive",
- "num-traits",
- "ticktimer-server",
- "utralib",
- "xous",
- "xous-ipc",
- "xous-names",
-]
-
-[[package]]
 name = "orbclient"
 version = "0.3.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,6 +1494,12 @@ dependencies = [
  "sdl2",
  "sdl2-sys",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0744126afe1a6dd7f394cb50a716dbe086cb06e255e53d8d0185d82828358fb5"
 
 [[package]]
 name = "pddb"
@@ -1708,6 +1776,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "repl"
+version = "0.1.0"
+dependencies = [
+ "codec",
+ "com",
+ "content-plugin-api",
+ "gam",
+ "graphics-server",
+ "ime-plugin-api",
+ "ime-plugin-shell",
+ "llio",
+ "locales",
+ "log",
+ "log-server",
+ "num-derive",
+ "num-traits",
+ "ticktimer-server",
+ "trng",
+ "xous",
+ "xous-ipc",
+ "xous-names",
+]
+
+[[package]]
 name = "ring"
 version = "0.16.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1720,6 +1812,14 @@ dependencies = [
  "untrusted",
  "web-sys",
  "winapi",
+]
+
+[[package]]
+name = "riscv"
+version = "0.5.6"
+dependencies = [
+ "bare-metal",
+ "bit_field",
 ]
 
 [[package]]
@@ -1780,6 +1880,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "blowfish",
+ "byteorder",
  "cipher",
  "com",
  "curve25519-dalek",
@@ -1794,11 +1895,11 @@ dependencies = [
  "locales",
  "log",
  "log-server",
+ "modals",
  "num-derive",
  "num-traits",
  "rand_core 0.5.1",
  "rkyv",
- "rtc",
  "sha2",
  "spinor",
  "susres",
@@ -1809,28 +1910,6 @@ dependencies = [
  "xous-ipc",
  "xous-names",
  "zeroize",
-]
-
-[[package]]
-name = "rtc"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "chrono",
- "gam",
- "llio",
- "locales",
- "log",
- "log-server",
- "modals",
- "num-derive",
- "num-traits",
- "rkyv",
- "ticktimer-server",
- "utralib",
- "xous",
- "xous-ipc",
- "xous-names",
 ]
 
 [[package]]
@@ -1853,11 +1932,20 @@ checksum = "1956f5517128a2b6f23ab2dadf1a976f4f5b27962e7724c2bf3d45e539ec098c"
 
 [[package]]
 name = "rustc_version"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
+dependencies = [
+ "semver 0.9.0",
+]
+
+[[package]]
+name = "rustc_version"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
- "semver",
+ "semver 1.0.4",
 ]
 
 [[package]]
@@ -1912,9 +2000,24 @@ dependencies = [
 
 [[package]]
 name = "semver"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
+dependencies = [
+ "semver-parser",
+]
+
+[[package]]
+name = "semver"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "568a8e6258aa33c13358f81fd834adb854c6f7c9468520910a9b1e8fac068012"
+
+[[package]]
+name = "semver-parser"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
@@ -2000,6 +2103,7 @@ dependencies = [
  "cipher",
  "codec",
  "com",
+ "com_rs-ref",
  "content-plugin-api",
  "curve25519-dalek",
  "debug-here",
@@ -2017,15 +2121,14 @@ dependencies = [
  "llio",
  "log",
  "log-server",
+ "modals",
  "net",
  "num-derive",
  "num-traits",
- "oqc-test",
  "pddb",
  "rand_core 0.5.1",
  "rkyv",
  "root-keys",
- "rtc",
  "sha2",
  "spectrum-analyzer",
  "spinor",
@@ -2126,24 +2229,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stats_alloc"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a260c96bf26273969f360c2fc2e2c7732acc2ce49d939c7243c7230c2ad179d0"
+
+[[package]]
 name = "status"
 version = "0.1.0"
 dependencies = [
- "blitstr-ref",
  "chrono",
  "com",
  "content-plugin-api",
  "gam",
  "graphics-server",
+ "keyboard",
  "llio",
  "locales",
  "log",
  "log-server",
+ "modals",
+ "net",
  "num-derive",
  "num-traits",
+ "pddb",
  "rkyv",
  "root-keys",
- "rtc",
  "susres",
  "ticktimer-server",
  "trng",
@@ -2339,9 +2450,11 @@ dependencies = [
  "log-server",
  "num-derive",
  "num-traits",
+ "rkyv",
  "susres",
  "utralib",
  "xous",
+ "xous-ipc",
  "xous-names",
 ]
 
@@ -2456,16 +2569,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 
 [[package]]
-name = "vergen"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ce50d8996df1f85af15f2cd8d33daae6e479575123ef4314a51a70a230739cb"
-dependencies = [
- "bitflags",
- "chrono",
-]
-
-[[package]]
 name = "version-compare"
 version = "0.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2545,9 +2648,9 @@ checksum = "d7cff876b8f18eed75a66cf49b65e7f967cb354a7aa16003fb55dbfd25b44b4f"
 
 [[package]]
 name = "wayland-client"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06ca44d86554b85cf449f1557edc6cc7da935cc748c8e4bf1c507cbd43bae02c"
+checksum = "e3ab332350e502f159382201394a78e3cc12d0f04db863429260164ea40e0355"
 dependencies = [
  "bitflags",
  "downcast-rs",
@@ -2560,9 +2663,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-commons"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bd75ae380325dbcff2707f0cd9869827ea1d2d6d534cff076858d3f0460fd5a"
+checksum = "a21817947c7011bbd0a27e11b17b337bfd022e8544b071a2641232047966fbda"
 dependencies = [
  "nix",
  "once_cell",
@@ -2572,9 +2675,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-cursor"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b37e5455ec72f5de555ec39b5c3704036ac07c2ecd50d0bffe02d5fe2d4e65ab"
+checksum = "be610084edd1586d45e7bdd275fe345c7c1873598caa464c4fb835dee70fa65a"
 dependencies = [
  "nix",
  "wayland-client",
@@ -2583,9 +2686,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-protocols"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95df3317872bcf9eec096c864b69aa4769a1d5d6291a5b513f8ba0af0efbd52c"
+checksum = "286620ea4d803bacf61fa087a4242ee316693099ee5a140796aaba02b29f861f"
 dependencies = [
  "bitflags",
  "wayland-client",
@@ -2595,9 +2698,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-scanner"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389d680d7bd67512dc9c37f39560224327038deb0f0e8d33f870900441b68720"
+checksum = "ce923eb2deb61de332d1f356ec7b6bf37094dc5573952e1c8936db03b54c03f1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2606,9 +2709,9 @@ dependencies = [
 
 [[package]]
 name = "wayland-sys"
-version = "0.28.5"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2907bd297eef464a95ba9349ea771611771aa285b932526c633dc94d5400a8e2"
+checksum = "d841fca9aed7febf9bed2e9796c49bf58d4152ceda8ac949ebe00868d8f0feb8"
 dependencies = [
  "pkg-config",
 ]
@@ -2685,13 +2788,12 @@ dependencies = [
 
 [[package]]
 name = "x11-dl"
-version = "2.18.5"
+version = "2.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf981e3a5b3301209754218f962052d4d9ee97e478f4d26d4a6eced34c1fef8"
+checksum = "ea26926b4ce81a6f5d9d0f3a0bc401e5a37c6ae14a1bfaa8ff6099ca80038c59"
 dependencies = [
  "lazy_static",
  "libc",
- "maybe-uninit",
  "pkg-config",
 ]
 
@@ -2763,7 +2865,7 @@ checksum = "b07db065a5cf61a7e4ba64f29e67db906fb1787316516c4e6e5ff0fea1efcd8a"
 
 [[package]]
 name = "xous"
-version = "0.8.3"
+version = "0.9.7"
 dependencies = [
  "bitflags",
  "compiler_builtins",
@@ -2777,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "xous-ipc"
-version = "0.8.0"
+version = "0.9.7"
 dependencies = [
  "bitflags",
  "rkyv",
@@ -2813,9 +2915,12 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "atty",
+ "chrono",
  "curl",
  "filetime",
- "rustc_version",
+ "rustc_version 0.4.0",
+ "serde",
+ "serde_json",
  "zip",
 ]
 
