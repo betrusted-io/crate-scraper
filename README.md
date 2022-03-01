@@ -24,3 +24,4 @@ Here's a log of all the times this has been run:
 
 - Jan 10 2022 - `xous-core` eb0c1c437768bd6dbdc91fca72b328b98d3e1d7b
 - Feb 13 2022 - `xous-core` 4abb6548cd5596a1b929c18b43b51c49857decda - v0.9.6 tag
+- Mar  1 2022 - `xous-core` dd017fb291ec22e8db8949bd067df0b8dc1aaba1 - v0.9.7 tag - no change to Cargo.toml
