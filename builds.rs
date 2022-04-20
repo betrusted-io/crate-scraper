@@ -1,3 +1,10 @@
+========== build.rs from packed_simd_2-0.3.7 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").expect("TARGET environment variable not defined");
+    if target.contains("neon") {
+        println!("cargo:rustc-cfg=libcore_neon");
+    }
+}
 ========== build.rs from num-integer-0.1.44 ============================================================
 extern crate autocfg;
 
@@ -11,28 +18,6 @@ fn main() {
     }
 
     autocfg::rerun_path("build.rs");
-}
-========== build.rs from wayland-sys-0.28.5 ============================================================
-use pkg_config::Config;
-
-fn main() {
-    if std::env::var_os("CARGO_FEATURE_DLOPEN").is_some() {
-        // Do not link to anything
-        return;
-    }
-
-    if std::env::var_os("CARGO_FEATURE_CLIENT").is_some() {
-        Config::new().probe("wayland-client").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_CURSOR").is_some() {
-        Config::new().probe("wayland-cursor").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_EGL").is_some() {
-        Config::new().probe("wayland-egl").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_SERVER").is_some() {
-        Config::new().probe("wayland-server").unwrap();
-    }
 }
 ========== build.rs from crossbeam-utils-0.8.6 ============================================================
 #![warn(rust_2018_idioms)]
@@ -920,201 +905,6 @@ fn main() {
   if version_check::is_min_version("1.44.0").unwrap_or(true) {
     println!("cargo:rustc-cfg=stable_i128");
   }
-}
-========== build.rs from bitflags-1.2.1 ============================================================
-use std::env;
-use std::process::Command;
-use std::str::{self, FromStr};
-
-fn main(){
-    let minor = match rustc_minor_version() {
-        Some(minor) => minor,
-        None => return,
-    };
-
-    // const fn stabilized in Rust 1.31:
-    if minor >= 31 {
-        println!("cargo:rustc-cfg=bitflags_const_fn");
-    }
-}
-
-fn rustc_minor_version() -> Option<u32> {
-    let rustc = match env::var_os("RUSTC") {
-        Some(rustc) => rustc,
-        None => return None,
-    };
-
-    let output = match Command::new(rustc).arg("--version").output() {
-        Ok(output) => output,
-        Err(_) => return None,
-    };
-
-    let version = match str::from_utf8(&output.stdout) {
-        Ok(version) => version,
-        Err(_) => return None,
-    };
-
-    let mut pieces = version.split('.');
-    if pieces.next() != Some("rustc 1") {
-        return None;
-    }
-
-    let next = match pieces.next() {
-        Some(next) => next,
-        None => return None,
-    };
-
-    u32::from_str(next).ok()
-}========== build.rs from wayland-protocols-0.28.6 ============================================================
-extern crate wayland_scanner;
-
-use std::env::var;
-use std::path::Path;
-use wayland_scanner::*;
-
-type StableProtocol<'a> = (&'a str, &'a [(&'a str, &'a str)]);
-type UnstableProtocol<'a> = (&'a str, &'a [(&'a str, &'a [(&'a str, &'a str)])]);
-
-static STABLE_PROTOCOLS: &[StableProtocol] =
-    &[("presentation-time", &[]), ("viewporter", &[]), ("xdg-shell", &[])];
-
-static UNSTABLE_PROTOCOLS: &[UnstableProtocol] = &[
-    ("fullscreen-shell", &[("v1", &[])]),
-    ("idle-inhibit", &[("v1", &[])]),
-    ("input-method", &[("v1", &[])]),
-    ("input-timestamps", &[("v1", &[])]),
-    ("keyboard-shortcuts-inhibit", &[("v1", &[])]),
-    ("linux-dmabuf", &[("v1", &[])]),
-    (
-        "linux-explicit-synchronization",
-        &[(
-            "v1",
-            &[
-                ("zwp_linux_buffer_release_v1", "fenced_release"),
-                ("zwp_linux_buffer_release_v1", "immediate_release"),
-            ],
-        )],
-    ),
-    ("pointer-constraints", &[("v1", &[])]),
-    ("pointer-gestures", &[("v1", &[])]),
-    ("primary-selection", &[("v1", &[])]),
-    ("relative-pointer", &[("v1", &[])]),
-    ("tablet", &[("v1", &[]), ("v2", &[])]),
-    ("text-input", &[("v1", &[]), ("v3", &[])]),
-    ("xdg-decoration", &[("v1", &[])]),
-    ("xdg-foreign", &[("v1", &[]), ("v2", &[])]),
-    ("xdg-output", &[("v1", &[])]),
-    ("xdg-shell", &[("v5", &[]), ("v6", &[])]),
-    ("xwayland-keyboard-grab", &[("v1", &[])]),
-];
-
-static WLR_UNSTABLE_PROTOCOLS: &[UnstableProtocol] = &[
-    ("wlr-data-control", &[("v1", &[])]),
-    ("wlr-export-dmabuf", &[("v1", &[])]),
-    ("wlr-foreign-toplevel-management", &[("v1", &[])]),
-    ("wlr-gamma-control", &[("v1", &[])]),
-    ("wlr-input-inhibitor", &[("v1", &[])]),
-    ("wlr-layer-shell", &[("v1", &[])]),
-    ("wlr-output-management", &[("v1", &[])]),
-    ("wlr-output-power-management", &[("v1", &[])]),
-    ("wlr-screencopy", &[("v1", &[])]),
-    ("wlr-virtual-pointer", &[("v1", &[])]),
-];
-
-static MISC_PROTOCOLS: &[StableProtocol] = &[("gtk-primary-selection", &[])];
-
-fn generate_protocol(
-    name: &str,
-    protocol_file: &Path,
-    out_dir: &Path,
-    client: bool,
-    server: bool,
-    dest_events: &[(&str, &str)],
-) {
-    println!("cargo:rerun-if-changed={}", protocol_file.display());
-
-    if client {
-        generate_code_with_destructor_events(
-            &protocol_file,
-            out_dir.join(&format!("{}_client_api.rs", name)),
-            Side::Client,
-            dest_events,
-        );
-    }
-    if server {
-        generate_code_with_destructor_events(
-            &protocol_file,
-            out_dir.join(&format!("{}_server_api.rs", name)),
-            Side::Server,
-            dest_events,
-        );
-    }
-}
-
-fn main() {
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_CLIENT");
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_SERVER");
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_UNSTABLE_PROTOCOLS");
-
-    let out_dir_str = var("OUT_DIR").unwrap();
-    let out_dir = Path::new(&out_dir_str);
-
-    let client = var("CARGO_FEATURE_CLIENT").ok().is_some();
-    let server = var("CARGO_FEATURE_SERVER").ok().is_some();
-
-    for &(name, dest_events) in STABLE_PROTOCOLS {
-        let file = format!("{name}/{name}.xml", name = name);
-        generate_protocol(
-            name,
-            &Path::new("./protocols/stable").join(&file),
-            out_dir,
-            client,
-            server,
-            dest_events,
-        );
-    }
-
-    for &(name, dest_events) in MISC_PROTOCOLS {
-        let file = format!("{name}.xml", name = name);
-        generate_protocol(
-            name,
-            &Path::new("./misc").join(&file),
-            out_dir,
-            client,
-            server,
-            dest_events,
-        );
-    }
-
-    if var("CARGO_FEATURE_UNSTABLE_PROTOCOLS").ok().is_some() {
-        for &(name, versions) in UNSTABLE_PROTOCOLS {
-            for &(version, dest_events) in versions {
-                let file =
-                    format!("{name}/{name}-unstable-{version}.xml", name = name, version = version);
-                generate_protocol(
-                    &format!("{name}-{version}", name = name, version = version),
-                    &Path::new("./protocols/unstable").join(file),
-                    out_dir,
-                    client,
-                    server,
-                    dest_events,
-                );
-            }
-        }
-        for &(name, versions) in WLR_UNSTABLE_PROTOCOLS {
-            for &(version, dest_events) in versions {
-                let file = format!("{name}-unstable-{version}.xml", name = name, version = version);
-                generate_protocol(
-                    &format!("{name}-{version}", name = name, version = version),
-                    &Path::new("./wlr-protocols/unstable").join(file),
-                    out_dir,
-                    client,
-                    server,
-                    dest_events,
-                );
-            }
-        }
-    }
 }
 ========== build.rs from sdl2-sys-0.34.3 ============================================================
 #![allow(unused_imports, dead_code, unused_variables)]
@@ -2060,6 +1850,15 @@ fn get_os_from_triple(triple: &str) -> Option<&str>
 {
     triple.splitn(3, "-").nth(2)
 }
+========== build.rs from cast-0.2.7 ============================================================
+extern crate rustc_version;
+
+fn main() {
+    let vers = rustc_version::version().unwrap();
+    if vers.major == 1 && vers.minor >= 26 {
+        println!("cargo:rustc-cfg=stable_i128")
+    }
+}
 ========== build.rs from x11-dl-2.19.1 ============================================================
 // x11-rs: Rust bindings for X11 libraries
 // The X11 libraries are available under the MIT license.
@@ -2561,6 +2360,49 @@ mod musl_reference_tests {
         drop(Command::new("rustfmt").arg(&path).status());
     }
 }
+========== build.rs from rayon-core-1.9.1 ============================================================
+// We need a build script to use `link = "rayon-core"`.  But we're not
+// *actually* linking to anything, just making sure that we're the only
+// rayon-core in use.
+fn main() {
+    // we don't need to rebuild for anything else
+    println!("cargo:rerun-if-changed=build.rs");
+}
+========== build.rs from rustls-0.20.4 ============================================================
+/// This build script allows us to enable the `read_buf` language feature only
+/// for Rust Nightly.
+///
+/// See the comment in lib.rs to understand why we need this.
+
+#[cfg_attr(feature = "read_buf", rustversion::not(nightly))]
+fn main() {}
+
+#[cfg(feature = "read_buf")]
+#[rustversion::nightly]
+fn main() {
+    println!("cargo:rustc-cfg=read_buf");
+}
+========== build.rs from wayland-client-0.29.4 ============================================================
+extern crate wayland_scanner;
+
+use std::env::var;
+use std::path::Path;
+use wayland_scanner::*;
+
+fn main() {
+    let protocol_file = "./wayland.xml";
+
+    let out_dir_str = var("OUT_DIR").unwrap();
+    let out_dir = Path::new(&out_dir_str);
+
+    println!("cargo:rerun-if-changed={}", protocol_file);
+    generate_code_with_destructor_events(
+        protocol_file,
+        out_dir.join("wayland_api.rs"),
+        Side::Client,
+        &[("wl_callback", "done")],
+    );
+}
 ========== build.rs from log-0.4.14 ============================================================
 //! This build script detects target platforms that lack proper support for
 //! atomics and sets `cfg` flags accordingly.
@@ -2679,153 +2521,6 @@ fn main() {
 
     if vers.major == 1 && vers.minor < 31 {
         println!("cargo:rustc-cfg=unstable_const_fn")
-    }
-}
-========== build.rs from libc-0.2.106 ============================================================
-use std::env;
-use std::process::Command;
-use std::str;
-
-fn main() {
-    // Avoid unnecessary re-building.
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let (rustc_minor_ver, is_nightly) = rustc_minor_nightly().expect("Failed to get rustc version");
-    let rustc_dep_of_std = env::var("CARGO_FEATURE_RUSTC_DEP_OF_STD").is_ok();
-    let align_cargo_feature = env::var("CARGO_FEATURE_ALIGN").is_ok();
-    let const_extern_fn_cargo_feature = env::var("CARGO_FEATURE_CONST_EXTERN_FN").is_ok();
-    let libc_ci = env::var("LIBC_CI").is_ok();
-
-    if env::var("CARGO_FEATURE_USE_STD").is_ok() {
-        println!(
-            "cargo:warning=\"libc's use_std cargo feature is deprecated since libc 0.2.55; \
-             please consider using the `std` cargo feature instead\""
-        );
-    }
-
-    // The ABI of libc used by libstd is backward compatible with FreeBSD 10.
-    // The ABI of libc from crates.io is backward compatible with FreeBSD 11.
-    //
-    // On CI, we detect the actual FreeBSD version and match its ABI exactly,
-    // running tests to ensure that the ABI is correct.
-    match which_freebsd() {
-        Some(10) if libc_ci || rustc_dep_of_std => {
-            println!("cargo:rustc-cfg=freebsd10")
-        }
-        Some(11) if libc_ci => println!("cargo:rustc-cfg=freebsd11"),
-        Some(12) if libc_ci => println!("cargo:rustc-cfg=freebsd12"),
-        Some(13) if libc_ci => println!("cargo:rustc-cfg=freebsd13"),
-        Some(_) | None => println!("cargo:rustc-cfg=freebsd11"),
-    }
-
-    // On CI: deny all warnings
-    if libc_ci {
-        println!("cargo:rustc-cfg=libc_deny_warnings");
-    }
-
-    // Rust >= 1.15 supports private module use:
-    if rustc_minor_ver >= 15 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_priv_mod_use");
-    }
-
-    // Rust >= 1.19 supports unions:
-    if rustc_minor_ver >= 19 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_union");
-    }
-
-    // Rust >= 1.24 supports const mem::size_of:
-    if rustc_minor_ver >= 24 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_const_size_of");
-    }
-
-    // Rust >= 1.25 supports repr(align):
-    if rustc_minor_ver >= 25 || rustc_dep_of_std || align_cargo_feature {
-        println!("cargo:rustc-cfg=libc_align");
-    }
-
-    // Rust >= 1.30 supports `core::ffi::c_void`, so libc can just re-export it.
-    // Otherwise, it defines an incompatible type to retaining
-    // backwards-compatibility.
-    if rustc_minor_ver >= 30 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_core_cvoid");
-    }
-
-    // Rust >= 1.33 supports repr(packed(N)) and cfg(target_vendor).
-    if rustc_minor_ver >= 33 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_packedN");
-        println!("cargo:rustc-cfg=libc_cfg_target_vendor");
-    }
-
-    // #[thread_local] is currently unstable
-    if rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_thread_local");
-    }
-
-    if const_extern_fn_cargo_feature {
-        if !is_nightly || rustc_minor_ver < 40 {
-            panic!("const-extern-fn requires a nightly compiler >= 1.40")
-        }
-        println!("cargo:rustc-cfg=libc_const_extern_fn");
-    }
-}
-
-fn rustc_minor_nightly() -> Option<(u32, bool)> {
-    macro_rules! otry {
-        ($e:expr) => {
-            match $e {
-                Some(e) => e,
-                None => return None,
-            }
-        };
-    }
-
-    let rustc = otry!(env::var_os("RUSTC"));
-    let output = otry!(Command::new(rustc).arg("--version").output().ok());
-    let version = otry!(str::from_utf8(&output.stdout).ok());
-    let mut pieces = version.split('.');
-
-    if pieces.next() != Some("rustc 1") {
-        return None;
-    }
-
-    let minor = pieces.next();
-
-    // If `rustc` was built from a tarball, its version string
-    // will have neither a git hash nor a commit date
-    // (e.g. "rustc 1.39.0"). Treat this case as non-nightly,
-    // since a nightly build should either come from CI
-    // or a git checkout
-    let nightly_raw = otry!(pieces.next()).split('-').nth(1);
-    let nightly = nightly_raw
-        .map(|raw| raw.starts_with("dev") || raw.starts_with("nightly"))
-        .unwrap_or(false);
-    let minor = otry!(otry!(minor).parse().ok());
-
-    Some((minor, nightly))
-}
-
-fn which_freebsd() -> Option<i32> {
-    let output = std::process::Command::new("freebsd-version").output().ok();
-    if output.is_none() {
-        return None;
-    }
-    let output = output.unwrap();
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok();
-    if stdout.is_none() {
-        return None;
-    }
-    let stdout = stdout.unwrap();
-
-    match &stdout {
-        s if s.starts_with("10") => Some(10),
-        s if s.starts_with("11") => Some(11),
-        s if s.starts_with("12") => Some(12),
-        s if s.starts_with("13") => Some(13),
-        _ => None,
     }
 }
 ========== build.rs from libc-0.2.113 ============================================================
@@ -3588,6 +3283,38 @@ fn create_constants() {
 fn main() {
     create_constants();
 }
+========== build.rs from minifb-0.22.0 ============================================================
+use std::env;
+extern crate cc;
+
+fn main() {
+    if cfg!(not(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "redox"
+    ))) && cfg!(not(any(feature = "wayland", feature = "x11")))
+    {
+        panic!("At least one of the x11 or wayland features must be enabled");
+    }
+
+    let env = env::var("TARGET").unwrap();
+    if env.contains("darwin") {
+        cc::Build::new()
+            .flag("-mmacosx-version-min=10.10")
+            .file("src/native/macosx/MacMiniFB.m")
+            .file("src/native/macosx/OSXWindow.m")
+            .file("src/native/macosx/OSXWindowFrameView.m")
+            .compile("libminifb_native.a");
+        println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=framework=MetalKit");
+    } else if !env.contains("windows") {
+        // build scalar on non-windows and non-mac
+        cc::Build::new()
+            .file("src/native/posix/scalar.cpp")
+            .opt_level(3) // always build with opts for scaler so it's fast in debug also
+            .compile("libscalar.a")
+    }
+}
 ========== build.rs from serde-1.0.130 ============================================================
 use std::env;
 use std::process::Command;
@@ -3773,6 +3500,188 @@ fn main() {
 	common().unwrap();
 	x11().unwrap();
 }
+========== build.rs from wayland-protocols-0.29.4 ============================================================
+extern crate wayland_scanner;
+
+use std::env::var;
+use std::path::Path;
+use wayland_scanner::*;
+
+#[rustfmt::skip]
+type StableProtocol<'a> =    (&'a str,                &'a [(&'a str, &'a str)]);
+type VersionedProtocol<'a> = (&'a str, &'a [(&'a str, &'a [(&'a str, &'a str)])]);
+//                            ^        ^         ^        ^     ^        ^
+//                            |        |         |        |     |        |
+//                            Name     |         |        |     |        Name of event to specify as
+//                                     Versions  |        |     |        destructor
+//                                               Version  |     |
+//                                                        |     Interface the event is belongs to
+//                                                        |
+//                                                        Events to specify as destructors
+
+static STABLE_PROTOCOLS: &[StableProtocol] =
+    &[("presentation-time", &[]), ("viewporter", &[]), ("xdg-shell", &[])];
+
+static STAGING_PROTOCOLS: &[VersionedProtocol] = &[("xdg-activation", &[("v1", &[])])];
+
+static UNSTABLE_PROTOCOLS: &[VersionedProtocol] = &[
+    ("fullscreen-shell", &[("v1", &[])]),
+    ("idle-inhibit", &[("v1", &[])]),
+    ("input-method", &[("v1", &[])]),
+    ("input-timestamps", &[("v1", &[])]),
+    ("keyboard-shortcuts-inhibit", &[("v1", &[])]),
+    ("linux-dmabuf", &[("v1", &[])]),
+    (
+        "linux-explicit-synchronization",
+        &[(
+            "v1",
+            &[
+                ("zwp_linux_buffer_release_v1", "fenced_release"),
+                ("zwp_linux_buffer_release_v1", "immediate_release"),
+            ],
+        )],
+    ),
+    ("pointer-constraints", &[("v1", &[])]),
+    ("pointer-gestures", &[("v1", &[])]),
+    ("primary-selection", &[("v1", &[])]),
+    ("relative-pointer", &[("v1", &[])]),
+    ("tablet", &[("v1", &[]), ("v2", &[])]),
+    ("text-input", &[("v1", &[]), ("v3", &[])]),
+    ("xdg-decoration", &[("v1", &[])]),
+    ("xdg-foreign", &[("v1", &[]), ("v2", &[])]),
+    ("xdg-output", &[("v1", &[])]),
+    ("xdg-shell", &[("v5", &[]), ("v6", &[])]),
+    ("xwayland-keyboard-grab", &[("v1", &[])]),
+];
+
+static WLR_UNSTABLE_PROTOCOLS: &[VersionedProtocol] = &[
+    ("wlr-data-control", &[("v1", &[])]),
+    ("wlr-export-dmabuf", &[("v1", &[])]),
+    ("wlr-foreign-toplevel-management", &[("v1", &[])]),
+    ("wlr-gamma-control", &[("v1", &[])]),
+    ("wlr-input-inhibitor", &[("v1", &[])]),
+    ("wlr-layer-shell", &[("v1", &[])]),
+    ("wlr-output-management", &[("v1", &[])]),
+    ("wlr-output-power-management", &[("v1", &[])]),
+    ("wlr-screencopy", &[("v1", &[])]),
+    ("wlr-virtual-pointer", &[("v1", &[])]),
+];
+
+static MISC_PROTOCOLS: &[StableProtocol] = &[
+    ("gtk-primary-selection", &[]),
+    ("input-method-unstable-v2", &[]),
+    ("server-decoration", &[]),
+];
+
+fn generate_protocol(
+    name: &str,
+    protocol_file: &Path,
+    out_dir: &Path,
+    client: bool,
+    server: bool,
+    dest_events: &[(&str, &str)],
+) {
+    println!("cargo:rerun-if-changed={}", protocol_file.display());
+
+    if client {
+        generate_code_with_destructor_events(
+            &protocol_file,
+            out_dir.join(&format!("{}_client_api.rs", name)),
+            Side::Client,
+            dest_events,
+        );
+    }
+    if server {
+        generate_code_with_destructor_events(
+            &protocol_file,
+            out_dir.join(&format!("{}_server_api.rs", name)),
+            Side::Server,
+            dest_events,
+        );
+    }
+}
+
+fn main() {
+    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_CLIENT");
+    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_SERVER");
+    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_UNSTABLE_PROTOCOLS");
+
+    let out_dir_str = var("OUT_DIR").unwrap();
+    let out_dir = Path::new(&out_dir_str);
+
+    let client = var("CARGO_FEATURE_CLIENT").ok().is_some();
+    let server = var("CARGO_FEATURE_SERVER").ok().is_some();
+
+    for &(name, dest_events) in STABLE_PROTOCOLS {
+        let file = format!("{name}/{name}.xml", name = name);
+        generate_protocol(
+            name,
+            &Path::new("./protocols/stable").join(&file),
+            out_dir,
+            client,
+            server,
+            dest_events,
+        );
+    }
+
+    if var("CARGO_FEATURE_STAGING_PROTOCOLS").ok().is_some() {
+        for &(name, versions) in STAGING_PROTOCOLS {
+            for &(version, dest_events) in versions {
+                let file = format!("{name}/{name}-{version}.xml", name = name, version = version);
+                generate_protocol(
+                    &format!("{name}-{version}", name = name, version = version),
+                    &Path::new("./protocols/staging").join(&file),
+                    out_dir,
+                    client,
+                    server,
+                    dest_events,
+                );
+            }
+        }
+    }
+
+    for &(name, dest_events) in MISC_PROTOCOLS {
+        let file = format!("{name}.xml", name = name);
+        generate_protocol(
+            name,
+            &Path::new("./misc").join(&file),
+            out_dir,
+            client,
+            server,
+            dest_events,
+        );
+    }
+
+    if var("CARGO_FEATURE_UNSTABLE_PROTOCOLS").ok().is_some() {
+        for &(name, versions) in UNSTABLE_PROTOCOLS {
+            for &(version, dest_events) in versions {
+                let file =
+                    format!("{name}/{name}-unstable-{version}.xml", name = name, version = version);
+                generate_protocol(
+                    &format!("{name}-{version}", name = name, version = version),
+                    &Path::new("./protocols/unstable").join(file),
+                    out_dir,
+                    client,
+                    server,
+                    dest_events,
+                );
+            }
+        }
+        for &(name, versions) in WLR_UNSTABLE_PROTOCOLS {
+            for &(version, dest_events) in versions {
+                let file = format!("{name}-unstable-{version}.xml", name = name, version = version);
+                generate_protocol(
+                    &format!("{name}-{version}", name = name, version = version),
+                    &Path::new("./wlr-protocols/unstable").join(file),
+                    out_dir,
+                    client,
+                    server,
+                    dest_events,
+                );
+            }
+        }
+    }
+}
 ========== build.rs from miniz_oxide-0.4.3 ============================================================
 #![forbid(unsafe_code)]
 use autocfg;
@@ -3793,266 +3702,449 @@ fn main() {
     #[cfg(feature = "simd-accel")]
     println!("cargo:rustc-env=RUSTC_BOOTSTRAP=1");
 }
-========== build.rs from memoffset-0.6.1 ============================================================
-extern crate autocfg;
-
-fn main() {
-    let ac = autocfg::new();
-
-    // Check for a minimum version for a few features
-    if ac.probe_rustc_version(1, 20) {
-        println!("cargo:rustc-cfg=tuple_ty");
-    }
-    if ac.probe_rustc_version(1, 31) {
-        println!("cargo:rustc-cfg=allow_clippy");
-    }
-    if ac.probe_rustc_version(1, 36) {
-        println!("cargo:rustc-cfg=maybe_uninit");
-    }
-    if ac.probe_rustc_version(1, 40) {
-        println!("cargo:rustc-cfg=doctests");
-    }
-}
-========== build.rs from libz-sys-1.1.3 ============================================================
-extern crate cc;
-extern crate pkg_config;
-#[cfg(target_env = "msvc")]
-extern crate vcpkg;
-
+========== build.rs from libm-0.1.4 ============================================================
 use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=LIBZ_SYS_STATIC");
     println!("cargo:rerun-if-changed=build.rs");
-    let host = env::var("HOST").unwrap();
-    let target = env::var("TARGET").unwrap();
 
-    let host_and_target_contain = |s| host.contains(s) && target.contains(s);
+    #[cfg(feature = "musl-reference-tests")]
+    musl_reference_tests::generate();
 
-    let want_ng = cfg!(feature = "zlib-ng") && !cfg!(feature = "stock-zlib");
-
-    if want_ng && target != "wasm32-unknown-unknown" {
-        return build_zlib_ng(&target);
-    }
-
-    // Don't run pkg-config if we're linking statically (we'll build below) and
-    // also don't run pkg-config on macOS/FreeBSD/DragonFly. That'll end up printing
-    // `-L /usr/lib` which wreaks havoc with linking to an OpenSSL in /usr/local/lib
-    // (Homebrew, Ports, etc.)
-    let want_static =
-        cfg!(feature = "static") || env::var("LIBZ_SYS_STATIC").unwrap_or(String::new()) == "1";
-    if !want_static &&
-       !target.contains("msvc") && // pkg-config just never works here
-       !(host_and_target_contain("apple") ||
-         host_and_target_contain("freebsd") ||
-         host_and_target_contain("dragonfly"))
-    {
-        // Don't print system lib dirs to cargo since this interferes with other
-        // packages adding non-system search paths to link against libraries
-        // that are also found in a system-wide lib dir.
-        let zlib = pkg_config::Config::new()
-            .cargo_metadata(true)
-            .print_system_libs(false)
-            .probe("zlib");
-        if zlib.is_ok() {
-            return;
+    if !cfg!(feature = "checked") {
+        let lvl = env::var("OPT_LEVEL").unwrap();
+        if lvl != "0" {
+            println!("cargo:rustc-cfg=assert_no_panic");
         }
     }
-
-    if target.contains("msvc") {
-        if try_vcpkg() {
-            return;
-        }
-    }
-
-    // All android compilers should come with libz by default, so let's just use
-    // the one already there. Likewise, Haiku always ships with libz, so we can
-    // link to it even when cross-compiling.
-    if target.contains("android") || target.contains("haiku") {
-        println!("cargo:rustc-link-lib=z");
-        return;
-    }
-
-    let mut cfg = cc::Build::new();
-
-    // Situations where we build unconditionally.
-    //
-    // MSVC basically never has it preinstalled, MinGW picks up a bunch of weird
-    // paths we don't like, `want_static` may force us, cross compiling almost
-    // never has a prebuilt version, and musl is almost always static.
-    if target.contains("msvc")
-        || target.contains("pc-windows-gnu")
-        || want_static
-        || target != host
-    {
-        return build_zlib(&mut cfg, &target);
-    }
-
-    // If we've gotten this far we're probably a pretty standard platform.
-    // Almost all platforms here ship libz by default, but some don't have
-    // pkg-config files that we would find above.
-    //
-    // In any case test if zlib is actually installed and if so we link to it,
-    // otherwise continue below to build things.
-    if zlib_installed(&mut cfg) {
-        println!("cargo:rustc-link-lib=z");
-        return;
-    }
-
-    build_zlib(&mut cfg, &target)
 }
 
-fn build_zlib(cfg: &mut cc::Build, target: &str) {
-    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let lib = dst.join("lib");
+#[cfg(feature = "musl-reference-tests")]
+mod musl_reference_tests {
+    use rand::seq::SliceRandom;
+    use rand::Rng;
+    use std::fs;
+    use std::process::Command;
 
-    cfg.warnings(false).out_dir(&lib).include("src/zlib");
+    // Number of tests to generate for each function
+    const NTESTS: usize = 500;
 
-    cfg.file("src/zlib/adler32.c")
-        .file("src/zlib/compress.c")
-        .file("src/zlib/crc32.c")
-        .file("src/zlib/deflate.c")
-        .file("src/zlib/infback.c")
-        .file("src/zlib/inffast.c")
-        .file("src/zlib/inflate.c")
-        .file("src/zlib/inftrees.c")
-        .file("src/zlib/trees.c")
-        .file("src/zlib/uncompr.c")
-        .file("src/zlib/zutil.c");
+    // These files are all internal functions or otherwise miscellaneous, not
+    // defining a function we want to test.
+    const IGNORED_FILES: &[&str] = &["fenv.rs"];
 
-    if !cfg!(feature = "libc") || target.starts_with("wasm32") {
-        cfg.define("Z_SOLO", None);
-    } else {
-        cfg.file("src/zlib/gzclose.c")
-            .file("src/zlib/gzlib.c")
-            .file("src/zlib/gzread.c")
-            .file("src/zlib/gzwrite.c");
+    struct Function {
+        name: String,
+        args: Vec<Ty>,
+        ret: Vec<Ty>,
+        tests: Vec<Test>,
     }
 
-    if !target.contains("windows") {
-        cfg.define("STDC", None);
-        cfg.define("_LARGEFILE64_SOURCE", None);
-        cfg.define("_POSIX_SOURCE", None);
-        cfg.flag("-fvisibility=hidden");
-    }
-    if target.contains("apple") {
-        cfg.define("_C99_SOURCE", None);
-    }
-    if target.contains("solaris") {
-        cfg.define("_XOPEN_SOURCE", "700");
+    enum Ty {
+        F32,
+        F64,
+        I32,
+        Bool,
     }
 
-    cfg.compile("z");
+    struct Test {
+        inputs: Vec<i64>,
+        outputs: Vec<i64>,
+    }
 
-    fs::create_dir_all(dst.join("include")).unwrap();
-    fs::copy("src/zlib/zlib.h", dst.join("include/zlib.h")).unwrap();
-    fs::copy("src/zlib/zconf.h", dst.join("include/zconf.h")).unwrap();
-
-    fs::create_dir_all(lib.join("pkgconfig")).unwrap();
-    fs::write(
-        lib.join("pkgconfig/zlib.pc"),
-        fs::read_to_string("src/zlib/zlib.pc.in")
+    pub fn generate() {
+        let files = fs::read_dir("src/math")
             .unwrap()
-            .replace("@prefix@", dst.to_str().unwrap()),
-    )
-    .unwrap();
+            .map(|f| f.unwrap().path())
+            .collect::<Vec<_>>();
 
-    println!("cargo:root={}", dst.to_str().unwrap());
-    println!("cargo:rustc-link-search=native={}", lib.to_str().unwrap());
-    println!("cargo:include={}/include", dst.to_str().unwrap());
-}
-
-#[cfg(not(feature = "zlib-ng"))]
-fn build_zlib_ng(_target: &str) {}
-
-#[cfg(feature = "zlib-ng")]
-fn build_zlib_ng(target: &str) {
-    let install_dir = cmake::Config::new("src/zlib-ng")
-        .define("BUILD_SHARED_LIBS", "OFF")
-        .define("ZLIB_COMPAT", "ON")
-        .define("WITH_GZFILEOP", "ON")
-        .build();
-    let includedir = install_dir.join("include");
-    let libdir = install_dir.join("lib");
-    println!(
-        "cargo:rustc-link-search=native={}",
-        libdir.to_str().unwrap()
-    );
-    let libname = if target.contains("windows") {
-        if target.contains("msvc") && env::var("OPT_LEVEL").unwrap() == "0" {
-            "zlibd"
-        } else {
-            "zlib"
-        }
-    } else {
-        "z"
-    };
-    println!("cargo:rustc-link-lib=static={}", libname);
-    println!("cargo:root={}", install_dir.to_str().unwrap());
-    println!("cargo:include={}", includedir.to_str().unwrap());
-}
-
-#[cfg(not(target_env = "msvc"))]
-fn try_vcpkg() -> bool {
-    false
-}
-
-#[cfg(target_env = "msvc")]
-fn try_vcpkg() -> bool {
-    // see if there is a vcpkg tree with zlib installed
-    match vcpkg::Config::new()
-        .emit_includes(true)
-        .lib_names("zlib", "zlib1")
-        .probe("zlib")
-    {
-        Ok(_) => true,
-        Err(e) => {
-            println!("note, vcpkg did not find zlib: {}", e);
-            false
-        }
-    }
-}
-
-fn zlib_installed(cfg: &mut cc::Build) -> bool {
-    let compiler = cfg.get_compiler();
-    let mut cmd = Command::new(compiler.path());
-    cmd.arg("src/smoke.c").arg("-o").arg("/dev/null").arg("-lz");
-
-    println!("running {:?}", cmd);
-    if let Ok(status) = cmd.status() {
-        if status.success() {
-            return true;
-        }
-    }
-
-    false
-}
-========== build.rs from curl-0.4.35 ============================================================
-use std::env;
-use std::str::FromStr;
-
-fn main() {
-    // OpenSSL >= 1.1.0 can be initialized concurrently and is initialized correctly by libcurl.
-    // <= 1.0.2 need locking callbacks, which are provided by openssl_sys::init().
-    let use_openssl = match env::var("DEP_OPENSSL_VERSION") {
-        Ok(ver) => {
-            let ver = u32::from_str(&ver).unwrap();
-            if ver < 110 {
-                println!("cargo:rustc-cfg=need_openssl_init");
+        let mut math = Vec::new();
+        for file in files {
+            if IGNORED_FILES.iter().any(|f| file.ends_with(f)) {
+                continue;
             }
-            true
-        }
-        Err(_) => false,
-    };
 
-    if use_openssl {
-        // The system libcurl should have the default certificate paths configured.
-        if env::var_os("DEP_CURL_STATIC").is_some() {
-            println!("cargo:rustc-cfg=need_openssl_probe");
+            println!("generating musl reference tests in {:?}", file);
+
+            let contents = fs::read_to_string(file).unwrap();
+            let mut functions = contents.lines().filter(|f| f.starts_with("pub fn"));
+            while let Some(function_to_test) = functions.next() {
+                math.push(parse(function_to_test));
+            }
         }
+
+        // Generate a bunch of random inputs for each function. This will
+        // attempt to generate a good set of uniform test cases for exercising
+        // all the various functionality.
+        generate_random_tests(&mut math, &mut rand::thread_rng());
+
+        // After we have all our inputs, use the x86_64-unknown-linux-musl
+        // target to generate the expected output.
+        generate_test_outputs(&mut math);
+        //panic!("Boo");
+        // ... and now that we have both inputs and expected outputs, do a bunch
+        // of codegen to create the unit tests which we'll actually execute.
+        generate_unit_tests(&math);
+    }
+
+    /// A "poor man's" parser for the signature of a function
+    fn parse(s: &str) -> Function {
+        let s = eat(s, "pub fn ");
+        let pos = s.find('(').unwrap();
+        let name = &s[..pos];
+        let s = &s[pos + 1..];
+        let end = s.find(')').unwrap();
+        let args = s[..end]
+            .split(',')
+            .map(|arg| {
+                let colon = arg.find(':').unwrap();
+                parse_ty(arg[colon + 1..].trim())
+            })
+            .collect::<Vec<_>>();
+        let tail = &s[end + 1..];
+        let tail = eat(tail, " -> ");
+        let ret = parse_retty(tail.replace("{", "").trim());
+
+        return Function {
+            name: name.to_string(),
+            args,
+            ret,
+            tests: Vec::new(),
+        };
+
+        fn parse_ty(s: &str) -> Ty {
+            match s {
+                "f32" => Ty::F32,
+                "f64" => Ty::F64,
+                "i32" => Ty::I32,
+                "bool" => Ty::Bool,
+                other => panic!("unknown type `{}`", other),
+            }
+        }
+
+        fn parse_retty(s: &str) -> Vec<Ty> {
+            match s {
+                "(f32, f32)" => vec![Ty::F32, Ty::F32],
+                "(f32, i32)" => vec![Ty::F32, Ty::I32],
+                "(f64, f64)" => vec![Ty::F64, Ty::F64],
+                "(f64, i32)" => vec![Ty::F64, Ty::I32],
+                other => vec![parse_ty(other)],
+            }
+        }
+
+        fn eat<'a>(s: &'a str, prefix: &str) -> &'a str {
+            if s.starts_with(prefix) {
+                &s[prefix.len()..]
+            } else {
+                panic!("{:?} didn't start with {:?}", s, prefix)
+            }
+        }
+    }
+
+    fn generate_random_tests<R: Rng>(functions: &mut [Function], rng: &mut R) {
+        for function in functions {
+            for _ in 0..NTESTS {
+                function.tests.push(generate_test(function, rng));
+            }
+        }
+
+        fn generate_test<R: Rng>(function: &Function, rng: &mut R) -> Test {
+            let mut inputs = function
+                .args
+                .iter()
+                .map(|ty| ty.gen_i64(rng))
+                .collect::<Vec<_>>();
+
+            // First argument to this function appears to be a number of
+            // iterations, so passing in massive random numbers causes it to
+            // take forever to execute, so make sure we're not running random
+            // math code until the heat death of the universe.
+            if function.name == "jn" || function.name == "jnf" {
+                inputs[0] &= 0xffff;
+            }
+
+            Test {
+                inputs,
+                // zero output for now since we'll generate it later
+                outputs: vec![],
+            }
+        }
+    }
+
+    impl Ty {
+        fn gen_i64<R: Rng>(&self, r: &mut R) -> i64 {
+            use std::f32;
+            use std::f64;
+
+            return match self {
+                Ty::F32 => {
+                    if r.gen_range(0, 20) < 1 {
+                        let i = *[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]
+                            .choose(r)
+                            .unwrap();
+                        i.to_bits().into()
+                    } else {
+                        r.gen::<f32>().to_bits().into()
+                    }
+                }
+                Ty::F64 => {
+                    if r.gen_range(0, 20) < 1 {
+                        let i = *[f64::NAN, f64::INFINITY, f64::NEG_INFINITY]
+                            .choose(r)
+                            .unwrap();
+                        i.to_bits() as i64
+                    } else {
+                        r.gen::<f64>().to_bits() as i64
+                    }
+                }
+                Ty::I32 => {
+                    if r.gen_range(0, 10) < 1 {
+                        let i = *[i32::max_value(), 0, i32::min_value()].choose(r).unwrap();
+                        i.into()
+                    } else {
+                        r.gen::<i32>().into()
+                    }
+                }
+                Ty::Bool => r.gen::<bool>() as i64,
+            };
+        }
+
+        fn libc_ty(&self) -> &'static str {
+            match self {
+                Ty::F32 => "f32",
+                Ty::F64 => "f64",
+                Ty::I32 => "i32",
+                Ty::Bool => "i32",
+            }
+        }
+
+        fn libc_pty(&self) -> &'static str {
+            match self {
+                Ty::F32 => "*mut f32",
+                Ty::F64 => "*mut f64",
+                Ty::I32 => "*mut i32",
+                Ty::Bool => "*mut i32",
+            }
+        }
+
+        fn default(&self) -> &'static str {
+            match self {
+                Ty::F32 => "0_f32",
+                Ty::F64 => "0_f64",
+                Ty::I32 => "0_i32",
+                Ty::Bool => "false",
+            }
+        }
+
+        fn to_i64(&self) -> &'static str {
+            match self {
+                Ty::F32 => ".to_bits() as i64",
+                Ty::F64 => ".to_bits() as i64",
+                Ty::I32 => " as i64",
+                Ty::Bool => " as i64",
+            }
+        }
+    }
+
+    fn generate_test_outputs(functions: &mut [Function]) {
+        let mut src = String::new();
+        let dst = std::env::var("OUT_DIR").unwrap();
+
+        // Generate a program which will run all tests with all inputs in
+        // `functions`. This program will write all outputs to stdout (in a
+        // binary format).
+        src.push_str("use std::io::Write;");
+        src.push_str("fn main() {");
+        src.push_str("let mut result = Vec::new();");
+        for function in functions.iter_mut() {
+            src.push_str("unsafe {");
+            src.push_str("extern { fn ");
+            src.push_str(&function.name);
+            src.push_str("(");
+
+            let (ret, retptr) = match function.name.as_str() {
+                "sincos" | "sincosf" => (None, &function.ret[..]),
+                _ => (Some(&function.ret[0]), &function.ret[1..]),
+            };
+            for (i, arg) in function.args.iter().enumerate() {
+                src.push_str(&format!("arg{}: {},", i, arg.libc_ty()));
+            }
+            for (i, ret) in retptr.iter().enumerate() {
+                src.push_str(&format!("argret{}: {},", i, ret.libc_pty()));
+            }
+            src.push_str(")");
+            if let Some(ty) = ret {
+                src.push_str(" -> ");
+                src.push_str(ty.libc_ty());
+            }
+            src.push_str("; }");
+
+            src.push_str(&format!("static TESTS: &[[i64; {}]]", function.args.len()));
+            src.push_str(" = &[");
+            for test in function.tests.iter() {
+                src.push_str("[");
+                for val in test.inputs.iter() {
+                    src.push_str(&val.to_string());
+                    src.push_str(",");
+                }
+                src.push_str("],");
+            }
+            src.push_str("];");
+
+            src.push_str("for test in TESTS {");
+            for (i, arg) in retptr.iter().enumerate() {
+                src.push_str(&format!("let mut argret{} = {};", i, arg.default()));
+            }
+            src.push_str("let output = ");
+            src.push_str(&function.name);
+            src.push_str("(");
+            for (i, arg) in function.args.iter().enumerate() {
+                src.push_str(&match arg {
+                    Ty::F32 => format!("f32::from_bits(test[{}] as u32)", i),
+                    Ty::F64 => format!("f64::from_bits(test[{}] as u64)", i),
+                    Ty::I32 => format!("test[{}] as i32", i),
+                    Ty::Bool => format!("test[{}] as i32", i),
+                });
+                src.push_str(",");
+            }
+            for (i, _) in retptr.iter().enumerate() {
+                src.push_str(&format!("&mut argret{},", i));
+            }
+            src.push_str(");");
+            if let Some(ty) = &ret {
+                src.push_str(&format!("let output = output{};", ty.to_i64()));
+                src.push_str("result.extend_from_slice(&output.to_le_bytes());");
+            }
+
+            for (i, ret) in retptr.iter().enumerate() {
+                src.push_str(&format!(
+                    "result.extend_from_slice(&(argret{}{}).to_le_bytes());",
+                    i,
+                    ret.to_i64(),
+                ));
+            }
+            src.push_str("}");
+
+            src.push_str("}");
+        }
+
+        src.push_str("std::io::stdout().write_all(&result).unwrap();");
+
+        src.push_str("}");
+
+        let path = format!("{}/gen.rs", dst);
+        fs::write(&path, src).unwrap();
+
+        // Make it somewhat pretty if something goes wrong
+        drop(Command::new("rustfmt").arg(&path).status());
+
+        // Compile and execute this tests for the musl target, assuming we're an
+        // x86_64 host effectively.
+        let status = Command::new("rustc")
+            .current_dir(&dst)
+            .arg(&path)
+            .arg("--target=x86_64-unknown-linux-musl")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let output = Command::new("./gen").current_dir(&dst).output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+
+        // Map all the output bytes back to an `i64` and then shove it all into
+        // the expected results.
+        let mut results = output.stdout.chunks_exact(8).map(|buf| {
+            let mut exact = [0; 8];
+            exact.copy_from_slice(buf);
+            i64::from_le_bytes(exact)
+        });
+
+        for f in functions.iter_mut() {
+            for test in f.tests.iter_mut() {
+                test.outputs = (0..f.ret.len()).map(|_| results.next().unwrap()).collect();
+            }
+        }
+        assert!(results.next().is_none());
+    }
+
+    /// Codegens a file which has a ton of `#[test]` annotations for all the
+    /// tests that we generated above.
+    fn generate_unit_tests(functions: &[Function]) {
+        let mut src = String::new();
+        let dst = std::env::var("OUT_DIR").unwrap();
+
+        for function in functions {
+            src.push_str("#[test]");
+            src.push_str("fn ");
+            src.push_str(&function.name);
+            src.push_str("_matches_musl() {");
+            src.push_str(&format!(
+                "static TESTS: &[([i64; {}], [i64; {}])]",
+                function.args.len(),
+                function.ret.len(),
+            ));
+            src.push_str(" = &[");
+            for test in function.tests.iter() {
+                src.push_str("([");
+                for val in test.inputs.iter() {
+                    src.push_str(&val.to_string());
+                    src.push_str(",");
+                }
+                src.push_str("],");
+                src.push_str("[");
+                for val in test.outputs.iter() {
+                    src.push_str(&val.to_string());
+                    src.push_str(",");
+                }
+                src.push_str("],");
+                src.push_str("),");
+            }
+            src.push_str("];");
+
+            src.push_str("for (test, expected) in TESTS {");
+            src.push_str("let output = ");
+            src.push_str(&function.name);
+            src.push_str("(");
+            for (i, arg) in function.args.iter().enumerate() {
+                src.push_str(&match arg {
+                    Ty::F32 => format!("f32::from_bits(test[{}] as u32)", i),
+                    Ty::F64 => format!("f64::from_bits(test[{}] as u64)", i),
+                    Ty::I32 => format!("test[{}] as i32", i),
+                    Ty::Bool => format!("test[{}] as i32", i),
+                });
+                src.push_str(",");
+            }
+            src.push_str(");");
+
+            for (i, ret) in function.ret.iter().enumerate() {
+                let get = if function.ret.len() == 1 {
+                    String::new()
+                } else {
+                    format!(".{}", i)
+                };
+                src.push_str(&(match ret {
+                    Ty::F32 => format!("if _eqf(output{}, f32::from_bits(expected[{}] as u32)).is_ok() {{ continue }}", get, i),
+                    Ty::F64 => format!("if _eq(output{}, f64::from_bits(expected[{}] as u64)).is_ok() {{ continue }}", get, i),
+                    Ty::I32 => format!("if output{} as i64 == expected[{}] {{ continue }}", get, i),
+                    Ty::Bool => unreachable!(),
+                }));
+            }
+
+            src.push_str(
+                r#"
+                panic!("INPUT: {:?} EXPECTED: {:?} ACTUAL {:?}", test, expected, output);
+            "#,
+            );
+            src.push_str("}");
+
+            src.push_str("}");
+        }
+
+        let path = format!("{}/musl-tests.rs", dst);
+        fs::write(&path, src).unwrap();
+
+        // Try to make it somewhat pretty
+        drop(Command::new("rustfmt").arg(&path).status());
     }
 }
 ========== build.rs from generic-array-0.14.4 ============================================================
@@ -4096,38 +4188,6 @@ fn rustc_minor_version() -> Option<u32> {
         return None;
     }
     otry!(pieces.next()).parse().ok()
-}
-========== build.rs from minifb-0.19.3 ============================================================
-use std::env;
-extern crate cc;
-
-fn main() {
-    if cfg!(not(any(
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "redox"
-    ))) && cfg!(not(any(feature = "wayland", feature = "x11")))
-    {
-        panic!("At least one of the x11 or wayland features must be enabled");
-    }
-
-    let env = env::var("TARGET").unwrap();
-    if env.contains("darwin") {
-        cc::Build::new()
-            .flag("-mmacosx-version-min=10.10")
-            .file("src/native/macosx/MacMiniFB.m")
-            .file("src/native/macosx/OSXWindow.m")
-            .file("src/native/macosx/OSXWindowFrameView.m")
-            .compile("libminifb_native.a");
-        println!("cargo:rustc-link-lib=framework=Metal");
-        println!("cargo:rustc-link-lib=framework=MetalKit");
-    } else if !env.contains("windows") {
-        // build scalar on non-windows and non-mac
-        cc::Build::new()
-            .file("src/native/posix/scalar.cpp")
-            .opt_level(3) // always build with opts for scaler so it's fast in debug also
-            .compile("libscalar.a")
-    }
 }
 ========== build.rs from compiler_builtins-0.1.39 ============================================================
 use std::env;
@@ -4630,586 +4690,33 @@ mod c {
         cfg.compile("libcompiler-rt.a");
     }
 }
-========== build.rs from vergen-3.1.0 ============================================================
-extern crate chrono;
-
-pub fn main() {
-    let now = chrono::Utc::now();
-    println!(
-        "cargo:rustc-env=VERGEN_BUILD_TIMESTAMP={}",
-        now.to_rfc3339()
-    );
-}
-========== build.rs from curl-sys-0.4.45+curl-7.78.0 ============================================================
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn main() {
-    let host = env::var("HOST").unwrap();
-    let target = env::var("TARGET").unwrap();
-    let windows = target.contains("windows");
-
-    // This feature trumps all others, and is largely set by rustbuild to force
-    // usage of the system library to ensure that we're always building an
-    // ABI-compatible Cargo.
-    if cfg!(feature = "force-system-lib-on-osx") && target.contains("apple") {
-        return println!("cargo:rustc-flags=-l curl");
-    }
-
-    // When cross-compiling for Haiku, use the system's default supplied
-    // libcurl (it supports http2). This is in the case where rustc and
-    // cargo are built for Haiku, which is done from a Linux host.
-    if host != target && target.contains("haiku") {
-        return println!("cargo:rustc-flags=-l curl");
-    }
-
-    // If the static-curl feature is disabled, probe for a system-wide libcurl.
-    if !cfg!(feature = "static-curl") {
-        // OSX ships libcurl by default, so we just use that version
-        // so long as it has the right features enabled.
-        if target.contains("apple") && (!cfg!(feature = "http2") || curl_config_reports_http2()) {
-            return println!("cargo:rustc-flags=-l curl");
-        }
-
-        // Next, fall back and try to use pkg-config if its available.
-        if windows {
-            if try_vcpkg() {
-                return;
-            }
-        } else if try_pkg_config() {
-            return;
-        }
-    }
-
-    if !Path::new("curl/.git").exists() {
-        let _ = Command::new("git")
-            .args(&["submodule", "update", "--init"])
-            .status();
-    }
-
-    if target.contains("apple") {
-        // On (older) OSX we need to link against the clang runtime,
-        // which is hidden in some non-default path.
-        //
-        // More details at https://github.com/alexcrichton/curl-rust/issues/279.
-        if let Some(path) = macos_link_search_path() {
-            println!("cargo:rustc-link-lib=clang_rt.osx");
-            println!("cargo:rustc-link-search={}", path);
-        }
-    }
-
-    let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let include = dst.join("include");
-    let build = dst.join("build");
-    println!("cargo:root={}", dst.display());
-    println!("cargo:include={}", include.display());
-    println!("cargo:static=1");
-    fs::create_dir_all(include.join("curl")).unwrap();
-
-    for header in [
-        "curl.h",
-        "curlver.h",
-        "easy.h",
-        "options.h",
-        "mprintf.h",
-        "multi.h",
-        "stdcheaders.h",
-        "system.h",
-        "urlapi.h",
-        "typecheck-gcc.h",
-    ]
-    .iter()
-    {
-        fs::copy(
-            format!("curl/include/curl/{}", header),
-            include.join("curl").join(header),
-        )
-        .unwrap();
-    }
-
-    let pkgconfig = dst.join("lib/pkgconfig");
-    fs::create_dir_all(&pkgconfig).unwrap();
-    let contents = fs::read_to_string("curl/libcurl.pc.in").unwrap();
-    fs::write(
-        pkgconfig.join("libcurl.pc"),
-        contents
-            .replace("@prefix@", dst.to_str().unwrap())
-            .replace("@exec_prefix@", "")
-            .replace("@libdir@", dst.join("lib").to_str().unwrap())
-            .replace("@includedir@", include.to_str().unwrap())
-            .replace("@CPPFLAG_CURL_STATICLIB@", "-DCURL_STATICLIB")
-            .replace("@LIBCURL_LIBS@", "")
-            .replace("@SUPPORT_FEATURES@", "")
-            .replace("@SUPPORT_PROTOCOLS@", "")
-            .replace("@CURLVERSION@", "7.61.1"),
-    )
-    .unwrap();
-
-    let mut cfg = cc::Build::new();
-    cfg.out_dir(&build)
-        .include("curl/lib")
-        .include("curl/include")
-        .define("BUILDING_LIBCURL", None)
-        .define("CURL_DISABLE_CRYPTO_AUTH", None)
-        .define("CURL_DISABLE_DICT", None)
-        .define("CURL_DISABLE_GOPHER", None)
-        .define("CURL_DISABLE_IMAP", None)
-        .define("CURL_DISABLE_LDAP", None)
-        .define("CURL_DISABLE_LDAPS", None)
-        .define("CURL_DISABLE_NTLM", None)
-        .define("CURL_DISABLE_POP3", None)
-        .define("CURL_DISABLE_RTSP", None)
-        .define("CURL_DISABLE_SMB", None)
-        .define("CURL_DISABLE_SMTP", None)
-        .define("CURL_DISABLE_TELNET", None)
-        .define("CURL_DISABLE_TFTP", None)
-        .define("CURL_STATICLIB", None)
-        .define("ENABLE_IPV6", None)
-        .define("HAVE_ASSERT_H", None)
-        .define("OS", "\"unknown\"") // TODO
-        .define("HAVE_ZLIB_H", None)
-        .define("HAVE_LIBZ", None)
-        .define("HAVE_BOOL_T", None)
-        .define("HAVE_STDBOOL_H", None)
-        .file("curl/lib/asyn-thread.c")
-        .file("curl/lib/altsvc.c")
-        .file("curl/lib/base64.c")
-        .file("curl/lib/conncache.c")
-        .file("curl/lib/connect.c")
-        .file("curl/lib/content_encoding.c")
-        .file("curl/lib/cookie.c")
-        .file("curl/lib/curl_addrinfo.c")
-        .file("curl/lib/curl_ctype.c")
-        .file("curl/lib/curl_get_line.c")
-        .file("curl/lib/curl_memrchr.c")
-        .file("curl/lib/curl_range.c")
-        .file("curl/lib/curl_threads.c")
-        .file("curl/lib/dotdot.c")
-        .file("curl/lib/doh.c")
-        .file("curl/lib/dynbuf.c")
-        .file("curl/lib/easy.c")
-        .file("curl/lib/escape.c")
-        .file("curl/lib/file.c")
-        .file("curl/lib/fileinfo.c")
-        .file("curl/lib/formdata.c")
-        .file("curl/lib/getenv.c")
-        .file("curl/lib/getinfo.c")
-        .file("curl/lib/hash.c")
-        .file("curl/lib/hostasyn.c")
-        .file("curl/lib/hostcheck.c")
-        .file("curl/lib/hostip.c")
-        .file("curl/lib/hostip6.c")
-        .file("curl/lib/hsts.c")
-        .file("curl/lib/http.c")
-        .file("curl/lib/http2.c")
-        .file("curl/lib/http_chunks.c")
-        .file("curl/lib/http_proxy.c")
-        .file("curl/lib/if2ip.c")
-        .file("curl/lib/inet_ntop.c")
-        .file("curl/lib/inet_pton.c")
-        .file("curl/lib/llist.c")
-        .file("curl/lib/mime.c")
-        .file("curl/lib/mprintf.c")
-        .file("curl/lib/mqtt.c")
-        .file("curl/lib/multi.c")
-        .file("curl/lib/netrc.c")
-        .file("curl/lib/nonblock.c")
-        .file("curl/lib/parsedate.c")
-        .file("curl/lib/progress.c")
-        .file("curl/lib/rand.c")
-        .file("curl/lib/rename.c")
-        .file("curl/lib/select.c")
-        .file("curl/lib/sendf.c")
-        .file("curl/lib/setopt.c")
-        .file("curl/lib/share.c")
-        .file("curl/lib/slist.c")
-        .file("curl/lib/socks.c")
-        .file("curl/lib/socketpair.c")
-        .file("curl/lib/speedcheck.c")
-        .file("curl/lib/splay.c")
-        .file("curl/lib/strcase.c")
-        .file("curl/lib/strdup.c")
-        .file("curl/lib/strerror.c")
-        .file("curl/lib/strtok.c")
-        .file("curl/lib/strtoofft.c")
-        .file("curl/lib/timeval.c")
-        .file("curl/lib/transfer.c")
-        .file("curl/lib/url.c")
-        .file("curl/lib/urlapi.c")
-        .file("curl/lib/version.c")
-        .file("curl/lib/vtls/keylog.c")
-        .file("curl/lib/vtls/vtls.c")
-        .file("curl/lib/warnless.c")
-        .file("curl/lib/wildcard.c")
-        .define("HAVE_GETADDRINFO", None)
-        .define("HAVE_GETPEERNAME", None)
-        .define("HAVE_GETSOCKNAME", None)
-        .warnings(false);
-
-    if cfg!(feature = "protocol-ftp") {
-        cfg.file("curl/lib/curl_fnmatch.c")
-            .file("curl/lib/ftp.c")
-            .file("curl/lib/ftplistparser.c")
-            .file("curl/lib/pingpong.c");
-    } else {
-        cfg.define("CURL_DISABLE_FTP", None);
-    }
-
-    if cfg!(feature = "http2") {
-        cfg.define("USE_NGHTTP2", None)
-            .define("NGHTTP2_STATICLIB", None);
-
-        println!("cargo:rustc-cfg=link_libnghttp2");
-        if let Some(path) = env::var_os("DEP_NGHTTP2_ROOT") {
-            let path = PathBuf::from(path);
-            cfg.include(path.join("include"));
-        }
-    }
-
-    println!("cargo:rustc-cfg=link_libz");
-    if let Some(path) = env::var_os("DEP_Z_INCLUDE") {
-        cfg.include(path);
-    }
-
-    if cfg!(feature = "spnego") {
-        cfg.define("USE_SPNEGO", None)
-            .file("curl/lib/http_negotiate.c")
-            .file("curl/lib/vauth/vauth.c");
-    }
-
-    // Configure TLS backend. Since Cargo does not support mutually exclusive
-    // features, make sure we only compile one vtls.
-    if cfg!(feature = "mesalink") {
-        cfg.define("USE_MESALINK", None)
-            .file("curl/lib/vtls/mesalink.c");
-
-        if let Some(path) = env::var_os("DEP_MESALINK_INCLUDE") {
-            cfg.include(path);
-        }
-
-        if windows {
-            cfg.define("HAVE_WINDOWS", None);
-        } else {
-            cfg.define("HAVE_UNIX", None);
-        }
-    } else if cfg!(feature = "ssl") {
-        if windows {
-            cfg.define("USE_WINDOWS_SSPI", None)
-                .define("USE_SCHANNEL", None)
-                .file("curl/lib/x509asn1.c")
-                .file("curl/lib/curl_sspi.c")
-                .file("curl/lib/socks_sspi.c")
-                .file("curl/lib/vtls/schannel.c")
-                .file("curl/lib/vtls/schannel_verify.c");
-        } else if target.contains("-apple-") {
-            cfg.define("USE_SECTRANSP", None)
-                .file("curl/lib/vtls/sectransp.c");
-            if xcode_major_version().map_or(true, |v| v >= 9) {
-                // On earlier Xcode versions (<9), defining HAVE_BUILTIN_AVAILABLE
-                // would cause __bultin_available() to fail to compile due to
-                // unrecognized platform names, so we try to check for Xcode
-                // version first (if unknown, assume it's recent, as in >= 9).
-                cfg.define("HAVE_BUILTIN_AVAILABLE", "1");
-            }
-        } else {
-            cfg.define("USE_OPENSSL", None)
-                .file("curl/lib/vtls/openssl.c");
-
-            println!("cargo:rustc-cfg=link_openssl");
-            if let Some(path) = env::var_os("DEP_OPENSSL_INCLUDE") {
-                cfg.include(path);
-            }
-        }
-    }
-
-    // Configure platform-specific details.
-    if windows {
-        cfg.define("WIN32", None)
-            .define("USE_THREADS_WIN32", None)
-            .define("HAVE_IOCTLSOCKET_FIONBIO", None)
-            .define("USE_WINSOCK", None)
-            .file("curl/lib/system_win32.c")
-            .file("curl/lib/version_win32.c")
-            .file("curl/lib/curl_multibyte.c");
-
-        if cfg!(feature = "spnego") {
-            cfg.file("curl/lib/vauth/spnego_sspi.c");
-        }
-    } else {
-        cfg.define("RECV_TYPE_ARG1", "int")
-            .define("HAVE_PTHREAD_H", None)
-            .define("HAVE_ARPA_INET_H", None)
-            .define("HAVE_ERRNO_H", None)
-            .define("HAVE_FCNTL_H", None)
-            .define("HAVE_NETDB_H", None)
-            .define("HAVE_NETINET_IN_H", None)
-            .define("HAVE_NETINET_TCP_H", None)
-            .define("HAVE_POLL_H", None)
-            .define("HAVE_FCNTL_O_NONBLOCK", None)
-            .define("HAVE_SYS_SELECT_H", None)
-            .define("HAVE_SYS_STAT_H", None)
-            .define("HAVE_UNISTD_H", None)
-            .define("HAVE_RECV", None)
-            .define("HAVE_SELECT", None)
-            .define("HAVE_SEND", None)
-            .define("HAVE_SOCKET", None)
-            .define("HAVE_STERRROR_R", None)
-            .define("HAVE_SOCKETPAIR", None)
-            .define("HAVE_STRUCT_TIMEVAL", None)
-            .define("HAVE_SYS_UN_H", None)
-            .define("USE_THREADS_POSIX", None)
-            .define("USE_UNIX_SOCKETS", None)
-            .define("RECV_TYPE_ARG2", "void*")
-            .define("RECV_TYPE_ARG3", "size_t")
-            .define("RECV_TYPE_ARG4", "int")
-            .define("RECV_TYPE_RETV", "ssize_t")
-            .define("SEND_QUAL_ARG2", "const")
-            .define("SEND_TYPE_ARG1", "int")
-            .define("SEND_TYPE_ARG2", "void*")
-            .define("SEND_TYPE_ARG3", "size_t")
-            .define("SEND_TYPE_ARG4", "int")
-            .define("SEND_TYPE_RETV", "ssize_t")
-            .define("SIZEOF_CURL_OFF_T", "8")
-            .define("SIZEOF_INT", "4")
-            .define("SIZEOF_SHORT", "2");
-
-        if target.contains("-apple-") {
-            cfg.define("__APPLE__", None)
-                .define("macintosh", None)
-                .define("HAVE_MACH_ABSOLUTE_TIME", None);
-        } else {
-            cfg.define("HAVE_CLOCK_GETTIME_MONOTONIC", None)
-                .define("HAVE_GETTIMEOFDAY", None)
-                // poll() on various versions of macOS are janky, so only use it
-                // on non-macOS unix-likes. This matches the official default
-                // build configuration as well.
-                .define("HAVE_POLL_FINE", None);
-        }
-
-        if cfg!(feature = "spnego") {
-            cfg.define("HAVE_GSSAPI", None)
-                .file("curl/lib/curl_gssapi.c")
-                .file("curl/lib/socks_gssapi.c")
-                .file("curl/lib/vauth/spnego_gssapi.c");
-            if let Some(path) = env::var_os("GSSAPI_ROOT") {
-                let path = PathBuf::from(path);
-                cfg.include(path.join("include"));
-            }
-
-            // Link against the MIT gssapi library. It might be desirable to add support for
-            // choosing between MIT and Heimdal libraries in the future.
-            println!("cargo:rustc-link-lib=gssapi_krb5");
-        }
-
-        let width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH")
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
-        cfg.define("SIZEOF_SSIZE_T", Some(&(width / 8).to_string()[..]));
-        cfg.define("SIZEOF_SIZE_T", Some(&(width / 8).to_string()[..]));
-        cfg.define("SIZEOF_LONG", Some(&(width / 8).to_string()[..]));
-
-        cfg.flag("-fvisibility=hidden");
-    }
-
-    cfg.compile("curl");
-
-    if windows {
-        println!("cargo:rustc-link-lib=ws2_32");
-        println!("cargo:rustc-link-lib=crypt32");
-    }
-
-    // Illumos/Solaris requires explicit linking with libnsl
-    if target.contains("solaris") {
-        println!("cargo:rustc-link-lib=nsl");
-    }
-
-    if target.contains("-apple-") {
-        println!("cargo:rustc-link-lib=framework=Security");
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
-        println!("cargo:rustc-link-lib=framework=SystemConfiguration");
-    }
-}
-
-#[cfg(not(target_env = "msvc"))]
-fn try_vcpkg() -> bool {
-    false
-}
-
-#[cfg(target_env = "msvc")]
-fn try_vcpkg() -> bool {
-    // the import library for the dll is called libcurl_imp
-    let mut successful_probe_details = match vcpkg::Config::new()
-        .lib_names("libcurl_imp", "libcurl")
-        .emit_includes(true)
-        .probe("curl")
-    {
-        Ok(details) => Some(details),
-        Err(e) => {
-            println!("first run of vcpkg did not find libcurl: {}", e);
-            None
-        }
-    };
-
-    if successful_probe_details.is_none() {
-        match vcpkg::Config::new()
-            .lib_name("libcurl")
-            .emit_includes(true)
-            .probe("curl")
-        {
-            Ok(details) => successful_probe_details = Some(details),
-            Err(e) => println!("second run of vcpkg did not find libcurl: {}", e),
-        }
-    }
-
-    if successful_probe_details.is_some() {
-        // Found libcurl which depends on openssl, libssh2 and zlib
-        // in the a default vcpkg installation. Probe for them
-        // but do not fail if they are not present as we may be working
-        // with a customized vcpkg installation.
-        vcpkg::Config::new()
-            .lib_name("libeay32")
-            .lib_name("ssleay32")
-            .probe("openssl")
-            .ok();
-
-        vcpkg::probe_package("libssh2").ok();
-
-        vcpkg::Config::new()
-            .lib_names("zlib", "zlib1")
-            .probe("zlib")
-            .ok();
-
-        println!("cargo:rustc-link-lib=crypt32");
-        println!("cargo:rustc-link-lib=gdi32");
-        println!("cargo:rustc-link-lib=user32");
-        println!("cargo:rustc-link-lib=wldap32");
-        return true;
-    }
-    false
-}
-
-fn try_pkg_config() -> bool {
-    let mut cfg = pkg_config::Config::new();
-    cfg.cargo_metadata(false);
-    let lib = match cfg.probe("libcurl") {
-        Ok(lib) => lib,
-        Err(e) => {
-            println!(
-                "Couldn't find libcurl from pkgconfig ({:?}), \
-                 compiling it from source...",
-                e
-            );
-            return false;
-        }
-    };
-
-    // Not all system builds of libcurl have http2 features enabled, so if we've
-    // got a http2-requested build then we may fall back to a build from source.
-    if cfg!(feature = "http2") && !curl_config_reports_http2() {
-        return false;
-    }
-
-    // Re-find the library to print cargo's metadata, then print some extra
-    // metadata as well.
-    cfg.cargo_metadata(true).probe("libcurl").unwrap();
-    for path in lib.include_paths.iter() {
-        println!("cargo:include={}", path.display());
-    }
-    true
-}
-
-fn xcode_major_version() -> Option<u8> {
-    let output = Command::new("xcodebuild").arg("-version").output().ok()?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        println!("xcode version: {}", stdout);
-        let mut words = stdout.split_whitespace();
-        if words.next()? == "Xcode" {
-            let version = words.next()?;
-            return version[..version.find('.')?].parse().ok();
-        }
-    }
-    println!("unable to determine Xcode version, assuming >= 9");
-    None
-}
-
-fn curl_config_reports_http2() -> bool {
-    let output = Command::new("curl-config").arg("--features").output();
-    let output = match output {
-        Ok(out) => out,
-        Err(e) => {
-            println!("failed to run curl-config ({}), building from source", e);
-            return false;
-        }
-    };
-    if !output.status.success() {
-        println!("curl-config failed: {}", output.status);
-        return false;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.contains("HTTP2") {
-        println!(
-            "failed to find http-2 feature enabled in pkg-config-found \
-             libcurl, building from source"
-        );
-        return false;
-    }
-
-    true
-}
-
-fn macos_link_search_path() -> Option<String> {
-    let output = Command::new("clang")
-        .arg("--print-search-dirs")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        println!(
-            "failed to run 'clang --print-search-dirs', continuing without a link search path"
-        );
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.contains("libraries: =") {
-            let path = line.split('=').skip(1).next()?;
-            return Some(format!("{}/lib/darwin", path));
-        }
-    }
-
-    println!("failed to determine link search path, continuing without it");
-    None
-}
-========== build.rs from wayland-sys-0.28.6 ============================================================
-use pkg_config::Config;
-
-fn main() {
-    if std::env::var_os("CARGO_FEATURE_DLOPEN").is_some() {
-        // Do not link to anything
-        return;
-    }
-
-    if std::env::var_os("CARGO_FEATURE_CLIENT").is_some() {
-        Config::new().probe("wayland-client").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_CURSOR").is_some() {
-        Config::new().probe("wayland-cursor").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_EGL").is_some() {
-        Config::new().probe("wayland-egl").unwrap();
-    }
-    if std::env::var_os("CARGO_FEATURE_SERVER").is_some() {
-        Config::new().probe("wayland-server").unwrap();
-    }
-}
 ========== build.rs from sdl2-0.34.3 ============================================================
 fn main() {
     #[cfg(any(target_os="openbsd", target_os="freebsd"))]
     println!(r"cargo:rustc-link-search=/usr/local/lib");
+}
+========== build.rs from memoffset-0.6.5 ============================================================
+extern crate autocfg;
+
+fn main() {
+    let ac = autocfg::new();
+
+    // Check for a minimum version for a few features
+    if ac.probe_rustc_version(1, 20) {
+        println!("cargo:rustc-cfg=tuple_ty");
+    }
+    if ac.probe_rustc_version(1, 31) {
+        println!("cargo:rustc-cfg=allow_clippy");
+    }
+    if ac.probe_rustc_version(1, 36) {
+        println!("cargo:rustc-cfg=maybe_uninit");
+    }
+    if ac.probe_rustc_version(1, 40) {
+        println!("cargo:rustc-cfg=doctests");
+    }
+    if ac.probe_rustc_version(1, 51) {
+        println!("cargo:rustc-cfg=raw_ref_macros");
+    }
 }
 ========== build.rs from eyre-0.6.5 ============================================================
 use std::env;
@@ -5464,172 +4971,6 @@ fn target_has_feature(feature: &str) -> bool {
         .map(|features| features.contains(feature))
         .unwrap_or(false)
 }
-========== build.rs from getrandom-0.2.2 ============================================================
-#![deny(warnings)]
-
-use std::env;
-
-fn main() {
-    let target = env::var("TARGET").expect("TARGET was not set");
-    if target.contains("windows") {
-        // for BCryptGenRandom
-        println!("cargo:rustc-link-lib=bcrypt");
-    } else if target.contains("apple-ios") {
-        // for SecRandomCopyBytes and kSecRandomDefault
-        println!("cargo:rustc-link-lib=framework=Security");
-    }
-}
-========== build.rs from wayland-protocols-0.28.5 ============================================================
-extern crate wayland_scanner;
-
-use std::env::var;
-use std::path::Path;
-use wayland_scanner::*;
-
-type StableProtocol<'a> = (&'a str, &'a [(&'a str, &'a str)]);
-type UnstableProtocol<'a> = (&'a str, &'a [(&'a str, &'a [(&'a str, &'a str)])]);
-
-static STABLE_PROTOCOLS: &[StableProtocol] =
-    &[("presentation-time", &[]), ("viewporter", &[]), ("xdg-shell", &[])];
-
-static UNSTABLE_PROTOCOLS: &[UnstableProtocol] = &[
-    ("fullscreen-shell", &[("v1", &[])]),
-    ("idle-inhibit", &[("v1", &[])]),
-    ("input-method", &[("v1", &[])]),
-    ("input-timestamps", &[("v1", &[])]),
-    ("keyboard-shortcuts-inhibit", &[("v1", &[])]),
-    ("linux-dmabuf", &[("v1", &[])]),
-    (
-        "linux-explicit-synchronization",
-        &[(
-            "v1",
-            &[
-                ("zwp_linux_buffer_release_v1", "fenced_release"),
-                ("zwp_linux_buffer_release_v1", "immediate_release"),
-            ],
-        )],
-    ),
-    ("pointer-constraints", &[("v1", &[])]),
-    ("pointer-gestures", &[("v1", &[])]),
-    ("primary-selection", &[("v1", &[])]),
-    ("relative-pointer", &[("v1", &[])]),
-    ("tablet", &[("v1", &[]), ("v2", &[])]),
-    ("text-input", &[("v1", &[]), ("v3", &[])]),
-    ("xdg-decoration", &[("v1", &[])]),
-    ("xdg-foreign", &[("v1", &[]), ("v2", &[])]),
-    ("xdg-output", &[("v1", &[])]),
-    ("xdg-shell", &[("v5", &[]), ("v6", &[])]),
-    ("xwayland-keyboard-grab", &[("v1", &[])]),
-];
-
-static WLR_UNSTABLE_PROTOCOLS: &[UnstableProtocol] = &[
-    ("wlr-data-control", &[("v1", &[])]),
-    ("wlr-export-dmabuf", &[("v1", &[])]),
-    ("wlr-foreign-toplevel-management", &[("v1", &[])]),
-    ("wlr-gamma-control", &[("v1", &[])]),
-    ("wlr-input-inhibitor", &[("v1", &[])]),
-    ("wlr-layer-shell", &[("v1", &[])]),
-    ("wlr-output-management", &[("v1", &[])]),
-    ("wlr-output-power-management", &[("v1", &[])]),
-    ("wlr-screencopy", &[("v1", &[])]),
-    ("wlr-virtual-pointer", &[("v1", &[])]),
-];
-
-static MISC_PROTOCOLS: &[StableProtocol] = &[("gtk-primary-selection", &[])];
-
-fn generate_protocol(
-    name: &str,
-    protocol_file: &Path,
-    out_dir: &Path,
-    client: bool,
-    server: bool,
-    dest_events: &[(&str, &str)],
-) {
-    println!("cargo:rerun-if-changed={}", protocol_file.display());
-
-    if client {
-        generate_code_with_destructor_events(
-            &protocol_file,
-            out_dir.join(&format!("{}_client_api.rs", name)),
-            Side::Client,
-            dest_events,
-        );
-    }
-    if server {
-        generate_code_with_destructor_events(
-            &protocol_file,
-            out_dir.join(&format!("{}_server_api.rs", name)),
-            Side::Server,
-            dest_events,
-        );
-    }
-}
-
-fn main() {
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_CLIENT");
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_SERVER");
-    println!("cargo:rerun-if-changed-env=CARGO_FEATURE_UNSTABLE_PROTOCOLS");
-
-    let out_dir_str = var("OUT_DIR").unwrap();
-    let out_dir = Path::new(&out_dir_str);
-
-    let client = var("CARGO_FEATURE_CLIENT").ok().is_some();
-    let server = var("CARGO_FEATURE_SERVER").ok().is_some();
-
-    for &(name, dest_events) in STABLE_PROTOCOLS {
-        let file = format!("{name}/{name}.xml", name = name);
-        generate_protocol(
-            name,
-            &Path::new("./protocols/stable").join(&file),
-            out_dir,
-            client,
-            server,
-            dest_events,
-        );
-    }
-
-    for &(name, dest_events) in MISC_PROTOCOLS {
-        let file = format!("{name}.xml", name = name);
-        generate_protocol(
-            name,
-            &Path::new("./misc").join(&file),
-            out_dir,
-            client,
-            server,
-            dest_events,
-        );
-    }
-
-    if var("CARGO_FEATURE_UNSTABLE_PROTOCOLS").ok().is_some() {
-        for &(name, versions) in UNSTABLE_PROTOCOLS {
-            for &(version, dest_events) in versions {
-                let file =
-                    format!("{name}/{name}-unstable-{version}.xml", name = name, version = version);
-                generate_protocol(
-                    &format!("{name}-{version}", name = name, version = version),
-                    &Path::new("./protocols/unstable").join(file),
-                    out_dir,
-                    client,
-                    server,
-                    dest_events,
-                );
-            }
-        }
-        for &(name, versions) in WLR_UNSTABLE_PROTOCOLS {
-            for &(version, dest_events) in versions {
-                let file = format!("{name}-unstable-{version}.xml", name = name, version = version);
-                generate_protocol(
-                    &format!("{name}-{version}", name = name, version = version),
-                    &Path::new("./wlr-protocols/unstable").join(file),
-                    out_dir,
-                    client,
-                    server,
-                    dest_events,
-                );
-            }
-        }
-    }
-}
 ========== build.rs from proc-macro2-1.0.28 ============================================================
 // rustc-cfg emitted by the build script:
 //
@@ -5871,10 +5212,42 @@ fn main() {
         println!("cargo:rustc-cfg=rkyv_atomic");
     }
 }
+========== build.rs from wayland-sys-0.29.4 ============================================================
+use pkg_config::Config;
+
+fn main() {
+    if std::env::var_os("CARGO_FEATURE_DLOPEN").is_some() {
+        // Do not link to anything
+        return;
+    }
+
+    if std::env::var_os("CARGO_FEATURE_CLIENT").is_some() {
+        Config::new().probe("wayland-client").unwrap();
+    }
+    if std::env::var_os("CARGO_FEATURE_CURSOR").is_some() {
+        Config::new().probe("wayland-cursor").unwrap();
+    }
+    if std::env::var_os("CARGO_FEATURE_EGL").is_some() {
+        Config::new().probe("wayland-egl").unwrap();
+    }
+    if std::env::var_os("CARGO_FEATURE_SERVER").is_some() {
+        Config::new().probe("wayland-server").unwrap();
+    }
+}
 ========== build.rs from wasm-bindgen-0.2.74 ============================================================
 // Empty `build.rs` so that `[package] links = ...` works in `Cargo.toml`.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+}
+========== build.rs from rayon-1.5.1 ============================================================
+fn main() {
+    let ac = autocfg::new();
+    if ac.probe_expression("(0..10).step_by(2).rev()") {
+        autocfg::emit("step_by");
+    }
+    if ac.probe_expression("{ fn foo<const N: usize>() {} }") {
+        autocfg::emit("min_const_generics");
+    }
 }
 ========== build.rs from serde_derive-1.0.130 ============================================================
 use std::env;
@@ -5957,26 +5330,64 @@ fn rustc_version() -> Option<Compiler> {
     let nightly = version.contains("nightly");
     Some(Compiler { minor, nightly })
 }
-========== build.rs from wayland-client-0.28.6 ============================================================
-extern crate wayland_scanner;
+========== build.rs from crossbeam-epoch-0.9.8 ============================================================
+// The rustc-cfg listed below are considered public API, but it is *unstable*
+// and outside of the normal semver guarantees:
+//
+// - `crossbeam_no_atomic_cas`
+//      Assume the target does *not* support atomic CAS operations.
+//      This is usually detected automatically by the build script, but you may
+//      need to enable it manually when building for custom targets or using
+//      non-cargo build systems that don't run the build script.
+//
+// With the exceptions mentioned above, the rustc-cfg emitted by the build
+// script are *not* public API.
 
-use std::env::var;
-use std::path::Path;
-use wayland_scanner::*;
+#![warn(rust_2018_idioms)]
+
+use std::env;
+
+include!("no_atomic.rs");
 
 fn main() {
-    let protocol_file = "./wayland.xml";
+    let target = match env::var("TARGET") {
+        Ok(target) => target,
+        Err(e) => {
+            println!(
+                "cargo:warning={}: unable to get TARGET environment variable: {}",
+                env!("CARGO_PKG_NAME"),
+                e
+            );
+            return;
+        }
+    };
 
-    let out_dir_str = var("OUT_DIR").unwrap();
-    let out_dir = Path::new(&out_dir_str);
+    let cfg = match autocfg::AutoCfg::new() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!(
+                "cargo:warning={}: unable to determine rustc version: {}",
+                env!("CARGO_PKG_NAME"),
+                e
+            );
+            return;
+        }
+    };
 
-    println!("cargo:rerun-if-changed={}", protocol_file);
-    generate_code_with_destructor_events(
-        protocol_file,
-        out_dir.join("wayland_api.rs"),
-        Side::Client,
-        &[("wl_callback", "done")],
-    );
+    // Note that this is `no_*`, not `has_*`. This allows treating
+    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
+    // run. This is needed for compatibility with non-cargo build systems that
+    // don't run the build script.
+    if NO_ATOMIC_CAS.contains(&&*target) {
+        println!("cargo:rustc-cfg=crossbeam_no_atomic_cas");
+    }
+
+    if cfg.probe_rustc_version(1, 61) {
+        // TODO: invert cfg once Rust 1.61 became stable.
+        println!("cargo:rustc-cfg=crossbeam_const_fn_trait_bound");
+    }
+
+    println!("cargo:rerun-if-changed=no_atomic.rs");
 }
 ========== build.rs from ryu-1.0.5 ============================================================
 use std::env;
@@ -6019,57 +5430,6 @@ fn rustc_minor_version() -> Option<u32> {
     let next = pieces.next()?;
     u32::from_str(next).ok()
 }
-========== build.rs from maybe-uninit-2.0.0 ============================================================
-use std::env;
-use std::process::Command;
-use std::str::FromStr;
-
-fn main() {
-    let minor = match rustc_minor_version() {
-        Some(minor) => minor,
-        None => return,
-    };
-    if minor >= 22 {
-        println!("cargo:rustc-cfg=derive_copy");
-    }
-    if minor >= 28 {
-        println!("cargo:rustc-cfg=repr_transparent");
-    }
-    if minor >= 36 {
-        println!("cargo:rustc-cfg=native_uninit");
-    }
-
-}
-
-fn rustc_minor_version() -> Option<u32> {
-    let rustc = env::var_os("RUSTC");
-
-    let output = rustc.and_then(|rustc| {
-        Command::new(rustc).arg("--version").output().ok()
-    });
-
-    let version = output.and_then(|output| {
-        String::from_utf8(output.stdout).ok()
-    });
-
-    let version = if let Some(version) = version {
-        version
-    } else {
-        return None;
-    };
-
-    let mut pieces = version.split('.');
-    if pieces.next() != Some("rustc 1") {
-        return None;
-    }
-
-    let next = match pieces.next() {
-        Some(next) => next,
-        None => return None,
-    };
-
-    u32::from_str(next).ok()
-}
 ========== build.rs from nom-5.1.2 ============================================================
 extern crate version_check;
 
@@ -6077,59 +5437,6 @@ fn main() {
   if version_check::is_min_version("1.28.0").unwrap_or(true) {
     println!("cargo:rustc-cfg=stable_i128");
   }
-}
-========== build.rs from x11-dl-2.18.5 ============================================================
-// x11-rs: Rust bindings for X11 libraries
-// The X11 libraries are available under the MIT license.
-// These bindings are public domain.
-
-extern crate pkg_config;
-
-use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-
-fn main() {
-    let libraries = [
-        // lib           pkgconfig name
-        ("xext",        "xext"),
-        ("gl",          "gl"),
-        ("xcursor",     "xcursor"),
-        ("xxf86vm",     "xxf86vm"),
-        ("xft",         "xft"),
-        ("xinerama",    "xinerama"),
-        ("xi",          "xi"),
-        ("x11",         "x11"),
-        ("xlib_xcb",    "x11-xcb"),
-        ("xmu",         "xmu"),
-        ("xrandr",      "xrandr"),
-        ("xtst",        "xtst"),
-        ("xrender",     "xrender"),
-        ("xscrnsaver",  "xscrnsaver"),
-        ("xt",          "xt"),
-    ];
-
-    let mut config = String::new();
-    for &(lib, pcname) in libraries.iter() {
-        let libdir = match pkg_config::get_variable(pcname, "libdir") {
-            Ok(libdir) => format!("Some(\"{}\")", libdir),
-            Err(_) => "None".to_string(),
-        };
-        config.push_str(&format!("pub const {}: Option<&'static str> = {};\n", lib, libdir));
-    }
-    let config = format!("pub mod config {{ pub mod libdir {{\n{}}}\n}}", config);
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let dest_path = Path::new(&out_dir).join("config.rs");
-    let mut f = File::create(&dest_path).unwrap();
-    f.write_all(&config.into_bytes()).unwrap();
-
-    let target = env::var("TARGET").unwrap();
-    if target.contains("linux") {
-        println!("cargo:rustc-link-lib=dl");
-    } else if target.contains("freebsd") || target.contains("dragonfly") {
-        println!("cargo:rustc-link-lib=c");
-    }
 }
 ========== build.rs from clang-sys-1.1.0 ============================================================
 // Copyright 2016 Kyle Mayes
@@ -6460,25 +5767,4 @@ fn main() {
         // for SecRandomCopyBytes and kSecRandomDefault
         println!("cargo:rustc-link-lib=framework=Security");
     }
-}
-========== build.rs from wayland-client-0.28.5 ============================================================
-extern crate wayland_scanner;
-
-use std::env::var;
-use std::path::Path;
-use wayland_scanner::*;
-
-fn main() {
-    let protocol_file = "./wayland.xml";
-
-    let out_dir_str = var("OUT_DIR").unwrap();
-    let out_dir = Path::new(&out_dir_str);
-
-    println!("cargo:rerun-if-changed={}", protocol_file);
-    generate_code_with_destructor_events(
-        protocol_file,
-        out_dir.join("wayland_api.rs"),
-        Side::Client,
-        &[("wl_callback", "done")],
-    );
 }
