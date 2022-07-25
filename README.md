@@ -28,3 +28,4 @@ Here's a log of all the times this has been run:
 - Mar  2 2022 - `xous-core` 06e391e5419581c3ebb0fbfcfbac49c2aabfc134 - v0.9.7 tag+2 - Subtle fix to PDDB
 - Apr 20 2022 - `xous-core` b39f4c38ebedfec6828238824fa048251cfd0dbf - v0.9.8 tag+4 - new release
 - Jul 19 2022 - `xous-core` 593928bd752cf3cf408e6939fde94ca19bcbefa3 - v0.9.9 tag
+- Jul 25 2022 - `xous-core` ec5cc29ccd4752f84077b5c502b960238a44835a - v0.9.9 tag+30 - hotfix for AES-KWP issue
