@@ -1,4 +1,4 @@
-========== build.rs from anyhow-1.0.57 ============================================================
+========== build.rs from anyhow-1.0.58 ============================================================
 #![allow(clippy::option_if_let_else)]
 
 use std::env;
@@ -1538,6 +1538,371 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+========== build.rs from hidapi-1.4.1 ============================================================
+// **************************************************************************
+// Copyright (c) 2015 Roland Ruckerbauer All Rights Reserved.
+//
+// This file is part of hidapi_rust.
+//
+// hidapi_rust is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// hidapi_rust is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with hidapi_rust.  If not, see <http://www.gnu.org/licenses/>.
+// *************************************************************************
+
+extern crate cc;
+extern crate pkg_config;
+
+use std::env;
+
+fn main() {
+    let target = env::var("TARGET").unwrap();
+
+    if target.contains("linux") {
+        compile_linux();
+    } else if target.contains("windows") {
+        compile_windows();
+    } else if target.contains("darwin") {
+        compile_macos();
+    } else if target.contains("freebsd") {
+        compile_freebsd();
+    } else if target.contains("openbsd") {
+        compile_openbsd();
+    } else if target.contains("illumos") {
+        compile_illumos();
+    } else {
+        panic!("Unsupported target os for hidapi-rs");
+    }
+}
+
+fn compile_linux() {
+    // First check the features enabled for the crate.
+    // Only one linux backend should be enabled at a time.
+
+    let avail_backends: [(&'static str, Box<dyn Fn()>); 4] = [
+        (
+            "LINUX_STATIC_HIDRAW",
+            Box::new(|| {
+                let mut config = cc::Build::new();
+                config
+                    .file("etc/hidapi/linux/hid.c")
+                    .include("etc/hidapi/hidapi");
+                pkg_config::probe_library("libudev").expect("Unable to find libudev");
+                config.compile("libhidapi.a");
+            }),
+        ),
+        (
+            "LINUX_STATIC_LIBUSB",
+            Box::new(|| {
+                let mut config = cc::Build::new();
+                config
+                    .file("etc/hidapi/libusb/hid.c")
+                    .include("etc/hidapi/hidapi");
+                let lib =
+                    pkg_config::find_library("libusb-1.0").expect("Unable to find libusb-1.0");
+                for path in lib.include_paths {
+                    config.include(
+                        path.to_str()
+                            .expect("Failed to convert include path to str"),
+                    );
+                }
+                config.compile("libhidapi.a");
+            }),
+        ),
+        (
+            "LINUX_SHARED_HIDRAW",
+            Box::new(|| {
+                pkg_config::probe_library("hidapi-hidraw").expect("Unable to find hidapi-hidraw");
+            }),
+        ),
+        (
+            "LINUX_SHARED_LIBUSB",
+            Box::new(|| {
+                pkg_config::probe_library("hidapi-libusb").expect("Unable to find hidapi-libusb");
+            }),
+        ),
+    ];
+
+    let mut backends = avail_backends
+        .iter()
+        .filter(|f| env::var(format!("CARGO_FEATURE_{}", f.0)).is_ok());
+
+    if backends.clone().count() != 1 {
+        panic!("Exactly one linux hidapi backend must be selected.");
+    }
+
+    // Build it!
+    (backends.next().unwrap().1)();
+}
+
+//#[cfg(all(feature = "shared-libusb", not(feature = "shared-hidraw")))]
+//fn compile_linux() {
+//
+//}
+//
+//#[cfg(all(feature = "shared-hidraw"))]
+//fn compile_linux() {
+//
+//}
+
+fn compile_freebsd() {
+    pkg_config::probe_library("hidapi").expect("Unable to find hidapi");
+}
+
+fn compile_openbsd() {
+    pkg_config::probe_library("hidapi-libusb").expect("Unable to find hidapi");
+}
+
+fn compile_illumos() {
+    // First check the features enabled for the crate.
+    // Only one illumos backend should be enabled at a time.
+
+    let avail_backends: [(&'static str, Box<dyn Fn()>); 2] = [
+        (
+            "ILLUMOS_STATIC_LIBUSB",
+            Box::new(|| {
+                let mut config = cc::Build::new();
+                config
+                    .file("etc/hidapi/libusb/hid.c")
+                    .include("etc/hidapi/hidapi");
+                let lib =
+                    pkg_config::find_library("libusb-1.0").expect("Unable to find libusb-1.0");
+                for path in lib.include_paths {
+                    config.include(
+                        path.to_str()
+                            .expect("Failed to convert include path to str"),
+                    );
+                }
+                config.compile("libhidapi.a");
+            }),
+        ),
+        (
+            "ILLUMOS_SHARED_LIBUSB",
+            Box::new(|| {
+                pkg_config::probe_library("hidapi-libusb").expect("Unable to find hidapi-libusb");
+            }),
+        ),
+    ];
+
+    let mut backends = avail_backends
+        .iter()
+        .filter(|f| env::var(format!("CARGO_FEATURE_{}", f.0)).is_ok());
+
+    if backends.clone().count() != 1 {
+        panic!("Exactly one illumos hidapi backend must be selected.");
+    }
+
+    // Build it!
+    (backends.next().unwrap().1)();
+}
+
+fn compile_windows() {
+    let linkage = env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or(String::new());
+
+    let mut cc = cc::Build::new();
+    cc.file("etc/hidapi/windows/hid.c")
+        .include("etc/hidapi/hidapi");
+
+    if linkage.contains("crt-static") {
+        // https://doc.rust-lang.org/reference/linkage.html#static-and-dynamic-c-runtimes
+        cc.static_crt(true);
+    }
+    cc.compile("libhidapi.a");
+    println!("cargo:rustc-link-lib=setupapi");
+}
+
+fn compile_macos() {
+    cc::Build::new()
+        .file("etc/hidapi/mac/hid.c")
+        .include("etc/hidapi/hidapi")
+        .compile("libhidapi.a");
+    println!("cargo:rustc-link-lib=framework=IOKit");
+    println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    println!("cargo:rustc-link-lib=framework=AppKit")
+}
+========== build.rs from httparse-1.7.1 ============================================================
+use std::env;
+//use std::ffi::OsString;
+//use std::process::Command;
+
+fn main() {
+    // We don't currently need to check the Version anymore...
+    // But leaving this in place in case we need to in the future.
+    /*
+    let rustc = env::var_os("RUSTC").unwrap_or(OsString::from("rustc"));
+    let output = Command::new(&rustc)
+        .arg("--version")
+        .output()
+        .expect("failed to check 'rustc --version'")
+        .stdout;
+
+    let version = String::from_utf8(output)
+        .expect("rustc version output should be utf-8");
+    */
+
+    enable_new_features(/*&version*/);
+}
+
+fn enable_new_features(/*raw_version: &str*/) {
+    /*
+    let version = match Version::parse(raw_version) {
+        Ok(version) => version,
+        Err(err) => {
+            println!("cargo:warning=failed to parse `rustc --version`: {}", err);
+            return;
+        }
+    };
+    */
+
+    enable_simd(/*version*/);
+}
+
+fn enable_simd(/*version: Version*/) {
+    if env::var_os("CARGO_FEATURE_STD").is_none() {
+        println!("cargo:warning=building for no_std disables httparse SIMD");
+        return;
+    }
+    if env::var_os("CARGO_CFG_MIRI").is_some() {
+        println!("cargo:warning=building for Miri disables httparse SIMD");
+        return;
+    }
+
+    let env_disable = "CARGO_CFG_HTTPARSE_DISABLE_SIMD";
+    if var_is(env_disable, "1") {
+        println!("cargo:warning=detected {} environment variable, disabling SIMD", env_disable);
+        return;
+    }
+
+    println!("cargo:rustc-cfg=httparse_simd");
+
+    // cfg(target_feature) isn't stable yet, but CARGO_CFG_TARGET_FEATURE has
+    // a list... We aren't doing anything unsafe, since the is_x86_feature_detected
+    // macro still checks in the actual lib, BUT!
+    //
+    // By peeking at the list here, we can change up slightly how we do feature
+    // detection in the lib. If our features aren't in the feature list, we
+    // stick with a cached runtime detection strategy.
+    //
+    // But if the features *are* in the list, we benefit from removing our cache,
+    // since the compiler will eliminate several branches with its internal
+    // cfg(target_feature) usage.
+
+
+    let env_runtime_only = "CARGO_CFG_HTTPARSE_DISABLE_SIMD_COMPILETIME";
+    if var_is(env_runtime_only, "1") {
+        println!("cargo:warning=detected {} environment variable, using runtime SIMD detection only", env_runtime_only);
+        return;
+    }
+    let feature_list = match env::var_os("CARGO_CFG_TARGET_FEATURE") {
+        Some(var) => match var.into_string() {
+            Ok(s) => s,
+            Err(_) => {
+                println!("cargo:warning=CARGO_CFG_TARGET_FEATURE was not valid utf-8");
+                return;
+            },
+        },
+        None => {
+            println!("cargo:warning=CARGO_CFG_TARGET_FEATURE was not set");
+            return
+        },
+    };
+
+    let mut saw_sse42 = false;
+    let mut saw_avx2 = false;
+
+    for feature in feature_list.split(',') {
+        let feature = feature.trim();
+        if !saw_sse42 && feature == "sse4.2" {
+            saw_sse42 = true;
+            println!("cargo:rustc-cfg=httparse_simd_target_feature_sse42");
+        }
+
+        if !saw_avx2 && feature == "avx2" {
+            saw_avx2 = true;
+            println!("cargo:rustc-cfg=httparse_simd_target_feature_avx2");
+        }
+    }
+}
+
+/*
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+struct Version {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl Version {
+    fn parse(mut s: &str) -> Result<Version, String> {
+        if !s.starts_with("rustc ") {
+            return Err(format!("unrecognized version string: {}", s));
+        }
+        s = &s["rustc ".len()..];
+
+        let parts: Vec<&str> = s.split(".").collect();
+        if parts.len() < 3 {
+            return Err(format!("not enough version parts: {:?}", parts));
+        }
+
+        let mut num = String::new();
+        for c in parts[0].chars() {
+            if !c.is_digit(10) {
+                break;
+            }
+            num.push(c);
+        }
+        let major = num.parse::<u32>().map_err(|e| e.to_string())?;
+
+        num.clear();
+        for c in parts[1].chars() {
+            if !c.is_digit(10) {
+                break;
+            }
+            num.push(c);
+        }
+        let minor = num.parse::<u32>().map_err(|e| e.to_string())?;
+
+        num.clear();
+        for c in parts[2].chars() {
+            if !c.is_digit(10) {
+                break;
+            }
+            num.push(c);
+        }
+        let patch = num.parse::<u32>().map_err(|e| e.to_string())?;
+
+        Ok(Version {
+            major: major,
+            minor: minor,
+            patch: patch,
+        })
+    }
+}
+*/
+
+fn var_is(key: &str, val: &str) -> bool {
+    match env::var(key) {
+        Ok(v) => v == val,
+        Err(_) => false,
+    }
+}
+========== build.rs from indexmap-1.9.1 ============================================================
+fn main() {
+    // If "std" is explicitly requested, don't bother probing the target for it.
+    match std::env::var_os("CARGO_FEATURE_STD") {
+        Some(_) => autocfg::emit("has_std"),
+        None => autocfg::new().emit_sysroot_crate("std"),
+    }
+    autocfg::rerun_path("build.rs");
+}
 ========== build.rs from libc-0.2.126 ============================================================
 use std::env;
 use std::process::Command;
@@ -2835,6 +3200,13 @@ fn main() {
             .compile("libscalar.a")
     }
 }
+========== build.rs from miniz_oxide-0.4.4 ============================================================
+#![forbid(unsafe_code)]
+use autocfg;
+
+fn main() {
+    autocfg::new().emit_sysroot_crate("alloc");
+}
 ========== build.rs from num-integer-0.1.45 ============================================================
 extern crate autocfg;
 
@@ -2948,7 +3320,25 @@ fn main() {
         });
         f.write_all(b.as_bytes()).unwrap();
     }
-}========== build.rs from proc-macro-hack-0.5.19 ============================================================
+}========== build.rs from proc-macro-error-1.0.4 ============================================================
+fn main() {
+    if !version_check::is_feature_flaggable().unwrap_or(false) {
+        println!("cargo:rustc-cfg=use_fallback");
+    }
+
+    if version_check::is_max_version("1.38.0").unwrap_or(false)
+        || !version_check::Channel::read().unwrap().is_stable()
+    {
+        println!("cargo:rustc-cfg=skip_ui_tests");
+    }
+}
+========== build.rs from proc-macro-error-attr-1.0.4 ============================================================
+fn main() {
+    if version_check::is_max_version("1.36.0").unwrap_or(false) {
+        println!("cargo:rustc-cfg=always_assert_unwind");
+    }
+}
+========== build.rs from proc-macro-hack-0.5.19 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -3157,6 +3547,100 @@ fn feature_allowed(feature: &str) -> bool {
     // No allow-features= flag, allowed by default.
     true
 }
+========== build.rs from protobuf-3.1.0 ============================================================
+use std::env;
+use std::env::VarError;
+use std::fs::File;
+use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process;
+
+// % rustc +stable --version
+// rustc 1.26.0 (a77568041 2018-05-07)
+// % rustc +beta --version
+// rustc 1.27.0-beta.1 (03fb2f447 2018-05-09)
+// % rustc +nightly --version
+// rustc 1.27.0-nightly (acd3871ba 2018-05-10)
+fn version_is_nightly(version: &str) -> bool {
+    version.contains("nightly")
+}
+
+fn cfg_rust_version() {
+    let rustc = env::var("RUSTC").expect("RUSTC unset");
+
+    let mut child = process::Command::new(rustc)
+        .args(&["--version"])
+        .stdin(process::Stdio::null())
+        .stdout(process::Stdio::piped())
+        .spawn()
+        .expect("spawn rustc");
+
+    let mut rustc_version = String::new();
+
+    child
+        .stdout
+        .as_mut()
+        .expect("stdout")
+        .read_to_string(&mut rustc_version)
+        .expect("read_to_string");
+    assert!(child.wait().expect("wait").success());
+
+    if version_is_nightly(&rustc_version) {
+        println!("cargo:rustc-cfg=rustc_nightly");
+    }
+}
+
+fn cfg_serde() {
+    match env::var("CARGO_FEATURE_WITH_SERDE") {
+        Ok(_) => {
+            println!("cargo:rustc-cfg=serde");
+        }
+        Err(VarError::NotUnicode(..)) => panic!(),
+        Err(VarError::NotPresent) => {}
+    }
+}
+
+fn out_dir() -> PathBuf {
+    PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
+}
+
+fn version() -> String {
+    env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION")
+}
+
+fn write_version() {
+    let version = version();
+    let version_ident = format!(
+        "VERSION_{}",
+        version.replace(".", "_").replace("-", "_").to_uppercase()
+    );
+    let mut file = File::create(Path::join(&out_dir(), "version.rs")).expect("open");
+    writeln!(file, "/// protobuf crate version").unwrap();
+    writeln!(file, "pub const VERSION: &'static str = \"{}\";", version).unwrap();
+    writeln!(file, "/// This symbol is used by codegen").unwrap();
+    writeln!(file, "#[doc(hidden)]").unwrap();
+    writeln!(
+        file,
+        "pub const VERSION_IDENT: &'static str = \"{}\";",
+        version_ident
+    )
+    .unwrap();
+    writeln!(
+        file,
+        "/// This symbol can be referenced to assert that proper version of crate is used"
+    )
+    .unwrap();
+    writeln!(file, "pub const {}: () = ();", version_ident).unwrap();
+    file.flush().unwrap();
+}
+
+fn main() {
+    cfg_rust_version();
+    cfg_serde();
+    write_version();
+}
 ========== build.rs from radium-0.6.2 ============================================================
 //! Target detection
 //!
@@ -3283,822 +3767,6 @@ fn main() {
 fn main() {
     // we don't need to rebuild for anything else
     println!("cargo:rerun-if-changed=build.rs");
-}
-========== build.rs from ring-0.16.20 ============================================================
-// Copyright 2015-2016 Brian Smith.
-//
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-//
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHORS DISCLAIM ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
-// SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
-// OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
-// CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
-//! Build the non-Rust components.
-
-// It seems like it would be a good idea to use `log!` for logging, but it
-// isn't worth having the external dependencies (one for the `log` crate, and
-// another for the concrete logging implementation). Instead we use `eprintln!`
-// to log everything to stderr.
-
-// In the `pregenerate_asm_main()` case we don't want to access (Cargo)
-// environment variables at all, so avoid `use std::env` here.
-
-use std::{
-    fs::{self, DirEntry},
-    path::{Path, PathBuf},
-    process::Command,
-    time::SystemTime,
-};
-
-const X86: &str = "x86";
-const X86_64: &str = "x86_64";
-const AARCH64: &str = "aarch64";
-const ARM: &str = "arm";
-
-#[rustfmt::skip]
-const RING_SRCS: &[(&[&str], &str)] = &[
-    (&[], "crypto/fipsmodule/aes/aes_nohw.c"),
-    (&[], "crypto/fipsmodule/bn/montgomery.c"),
-    (&[], "crypto/fipsmodule/bn/montgomery_inv.c"),
-    (&[], "crypto/limbs/limbs.c"),
-    (&[], "crypto/mem.c"),
-    (&[], "crypto/poly1305/poly1305.c"),
-
-    (&[AARCH64, ARM, X86_64, X86], "crypto/crypto.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/curve25519/curve25519.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/ecp_nistz.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/ecp_nistz256.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/gfp_p256.c"),
-    (&[AARCH64, ARM, X86_64, X86], "crypto/fipsmodule/ec/gfp_p384.c"),
-
-    (&[X86_64, X86], "crypto/cpu-intel.c"),
-
-    (&[X86], "crypto/fipsmodule/aes/asm/aesni-x86.pl"),
-    (&[X86], "crypto/fipsmodule/aes/asm/vpaes-x86.pl"),
-    (&[X86], "crypto/fipsmodule/bn/asm/x86-mont.pl"),
-    (&[X86], "crypto/chacha/asm/chacha-x86.pl"),
-    (&[X86], "crypto/fipsmodule/ec/asm/ecp_nistz256-x86.pl"),
-    (&[X86], "crypto/fipsmodule/modes/asm/ghash-x86.pl"),
-
-    (&[X86_64], "crypto/fipsmodule/aes/asm/aesni-x86_64.pl"),
-    (&[X86_64], "crypto/fipsmodule/aes/asm/vpaes-x86_64.pl"),
-    (&[X86_64], "crypto/fipsmodule/bn/asm/x86_64-mont.pl"),
-    (&[X86_64], "crypto/fipsmodule/bn/asm/x86_64-mont5.pl"),
-    (&[X86_64], "crypto/chacha/asm/chacha-x86_64.pl"),
-    (&[X86_64], "crypto/fipsmodule/ec/asm/p256-x86_64-asm.pl"),
-    (&[X86_64], "crypto/fipsmodule/modes/asm/aesni-gcm-x86_64.pl"),
-    (&[X86_64], "crypto/fipsmodule/modes/asm/ghash-x86_64.pl"),
-    (&[X86_64], "crypto/poly1305/poly1305_vec.c"),
-    (&[X86_64], SHA512_X86_64),
-    (&[X86_64], "crypto/cipher_extra/asm/chacha20_poly1305_x86_64.pl"),
-
-    (&[AARCH64, ARM], "crypto/fipsmodule/aes/asm/aesv8-armx.pl"),
-    (&[AARCH64, ARM], "crypto/fipsmodule/modes/asm/ghashv8-armx.pl"),
-
-    (&[ARM], "crypto/fipsmodule/aes/asm/bsaes-armv7.pl"),
-    (&[ARM], "crypto/fipsmodule/aes/asm/vpaes-armv7.pl"),
-    (&[ARM], "crypto/fipsmodule/bn/asm/armv4-mont.pl"),
-    (&[ARM], "crypto/chacha/asm/chacha-armv4.pl"),
-    (&[ARM], "crypto/curve25519/asm/x25519-asm-arm.S"),
-    (&[ARM], "crypto/fipsmodule/ec/asm/ecp_nistz256-armv4.pl"),
-    (&[ARM], "crypto/fipsmodule/modes/asm/ghash-armv4.pl"),
-    (&[ARM], "crypto/poly1305/poly1305_arm.c"),
-    (&[ARM], "crypto/poly1305/poly1305_arm_asm.S"),
-    (&[ARM], "crypto/fipsmodule/sha/asm/sha256-armv4.pl"),
-    (&[ARM], "crypto/fipsmodule/sha/asm/sha512-armv4.pl"),
-
-    (&[AARCH64], "crypto/fipsmodule/aes/asm/vpaes-armv8.pl"),
-    (&[AARCH64], "crypto/fipsmodule/bn/asm/armv8-mont.pl"),
-    (&[AARCH64], "crypto/chacha/asm/chacha-armv8.pl"),
-    (&[AARCH64], "crypto/fipsmodule/ec/asm/ecp_nistz256-armv8.pl"),
-    (&[AARCH64], "crypto/fipsmodule/modes/asm/ghash-neon-armv8.pl"),
-    (&[AARCH64], SHA512_ARMV8),
-];
-
-const SHA256_X86_64: &str = "crypto/fipsmodule/sha/asm/sha256-x86_64.pl";
-const SHA512_X86_64: &str = "crypto/fipsmodule/sha/asm/sha512-x86_64.pl";
-
-const SHA256_ARMV8: &str = "crypto/fipsmodule/sha/asm/sha256-armv8.pl";
-const SHA512_ARMV8: &str = "crypto/fipsmodule/sha/asm/sha512-armv8.pl";
-
-const RING_TEST_SRCS: &[&str] = &[("crypto/constant_time_test.c")];
-
-#[rustfmt::skip]
-const RING_INCLUDES: &[&str] =
-    &[
-      "crypto/curve25519/curve25519_tables.h",
-      "crypto/curve25519/internal.h",
-      "crypto/fipsmodule/bn/internal.h",
-      "crypto/fipsmodule/ec/ecp_nistz256_table.inl",
-      "crypto/fipsmodule/ec/ecp_nistz384.inl",
-      "crypto/fipsmodule/ec/ecp_nistz.h",
-      "crypto/fipsmodule/ec/ecp_nistz384.h",
-      "crypto/fipsmodule/ec/ecp_nistz256.h",
-      "crypto/internal.h",
-      "crypto/limbs/limbs.h",
-      "crypto/limbs/limbs.inl",
-      "crypto/poly1305/internal.h",
-      "include/GFp/aes.h",
-      "include/GFp/arm_arch.h",
-      "include/GFp/base.h",
-      "include/GFp/check.h",
-      "include/GFp/cpu.h",
-      "include/GFp/mem.h",
-      "include/GFp/poly1305.h",
-      "include/GFp/type_check.h",
-      "third_party/fiat/curve25519_32.h",
-      "third_party/fiat/curve25519_64.h",
-    ];
-
-#[rustfmt::skip]
-const RING_PERL_INCLUDES: &[&str] =
-    &["crypto/perlasm/arm-xlate.pl",
-      "crypto/perlasm/x86gas.pl",
-      "crypto/perlasm/x86nasm.pl",
-      "crypto/perlasm/x86asm.pl",
-      "crypto/perlasm/x86_64-xlate.pl"];
-
-const RING_BUILD_FILE: &[&str] = &["build.rs"];
-
-const PREGENERATED: &str = "pregenerated";
-
-fn c_flags(target: &Target) -> &'static [&'static str] {
-    if target.env != MSVC {
-        static NON_MSVC_FLAGS: &[&str] = &[
-            "-std=c1x", // GCC 4.6 requires "c1x" instead of "c11"
-            "-Wbad-function-cast",
-            "-Wnested-externs",
-            "-Wstrict-prototypes",
-        ];
-        NON_MSVC_FLAGS
-    } else {
-        &[]
-    }
-}
-
-fn cpp_flags(target: &Target) -> &'static [&'static str] {
-    if target.env != MSVC {
-        static NON_MSVC_FLAGS: &[&str] = &[
-            "-pedantic",
-            "-pedantic-errors",
-            "-Wall",
-            "-Wextra",
-            "-Wcast-align",
-            "-Wcast-qual",
-            "-Wconversion",
-            "-Wenum-compare",
-            "-Wfloat-equal",
-            "-Wformat=2",
-            "-Winline",
-            "-Winvalid-pch",
-            "-Wmissing-field-initializers",
-            "-Wmissing-include-dirs",
-            "-Wredundant-decls",
-            "-Wshadow",
-            "-Wsign-compare",
-            "-Wsign-conversion",
-            "-Wundef",
-            "-Wuninitialized",
-            "-Wwrite-strings",
-            "-fno-strict-aliasing",
-            "-fvisibility=hidden",
-        ];
-        NON_MSVC_FLAGS
-    } else {
-        static MSVC_FLAGS: &[&str] = &[
-            "/GS",   // Buffer security checks.
-            "/Gy",   // Enable function-level linking.
-            "/EHsc", // C++ exceptions only, only in C++.
-            "/GR-",  // Disable RTTI.
-            "/Zc:wchar_t",
-            "/Zc:forScope",
-            "/Zc:inline",
-            "/Zc:rvalueCast",
-            // Warnings.
-            "/sdl",
-            "/Wall",
-            "/wd4127", // C4127: conditional expression is constant
-            "/wd4464", // C4464: relative include path contains '..'
-            "/wd4514", // C4514: <name>: unreferenced inline function has be
-            "/wd4710", // C4710: function not inlined
-            "/wd4711", // C4711: function 'function' selected for inline expansion
-            "/wd4820", // C4820: <struct>: <n> bytes padding added after <name>
-            "/wd5045", /* C5045: Compiler will insert Spectre mitigation for memory load if
-                        * /Qspectre switch specified */
-        ];
-        MSVC_FLAGS
-    }
-}
-
-const LD_FLAGS: &[&str] = &[];
-
-// None means "any OS" or "any target". The first match in sequence order is
-// taken.
-const ASM_TARGETS: &[(&str, Option<&str>, Option<&str>)] = &[
-    ("x86_64", Some("ios"), Some("macosx")),
-    ("x86_64", Some("macos"), Some("macosx")),
-    ("x86_64", Some(WINDOWS), Some("nasm")),
-    ("x86_64", None, Some("elf")),
-    ("aarch64", Some("ios"), Some("ios64")),
-    ("aarch64", Some("macos"), Some("ios64")),
-    ("aarch64", None, Some("linux64")),
-    ("x86", Some(WINDOWS), Some("win32n")),
-    ("x86", Some("ios"), Some("macosx")),
-    ("x86", None, Some("elf")),
-    ("arm", Some("ios"), Some("ios32")),
-    ("arm", None, Some("linux32")),
-    ("wasm32", None, None),
-];
-
-const WINDOWS: &str = "windows";
-const MSVC: &str = "msvc";
-const MSVC_OBJ_OPT: &str = "/Fo";
-const MSVC_OBJ_EXT: &str = "obj";
-
-fn main() {
-    if let Ok(package_name) = std::env::var("CARGO_PKG_NAME") {
-        if package_name == "ring" {
-            ring_build_rs_main();
-            return;
-        }
-    }
-
-    pregenerate_asm_main();
-}
-
-fn ring_build_rs_main() {
-    use std::env;
-
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let out_dir = PathBuf::from(out_dir);
-
-    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
-    let (obj_ext, obj_opt) = if env == MSVC {
-        (MSVC_OBJ_EXT, MSVC_OBJ_OPT)
-    } else {
-        ("o", "-o")
-    };
-
-    let is_git = std::fs::metadata(".git").is_ok();
-
-    // Published builds are always release builds.
-    let is_debug = is_git && env::var("DEBUG").unwrap() != "false";
-
-    let target = Target {
-        arch,
-        os,
-        env,
-        obj_ext,
-        obj_opt,
-        is_git,
-        is_debug,
-    };
-    let pregenerated = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join(PREGENERATED);
-
-    build_c_code(&target, pregenerated, &out_dir);
-    check_all_files_tracked()
-}
-
-fn pregenerate_asm_main() {
-    let pregenerated = PathBuf::from(PREGENERATED);
-    std::fs::create_dir(&pregenerated).unwrap();
-    let pregenerated_tmp = pregenerated.join("tmp");
-    std::fs::create_dir(&pregenerated_tmp).unwrap();
-
-    for &(target_arch, target_os, perlasm_format) in ASM_TARGETS {
-        // For Windows, package pregenerated object files instead of
-        // pregenerated assembly language source files, so that the user
-        // doesn't need to install the assembler.
-        let asm_dir = if target_os == Some(WINDOWS) {
-            &pregenerated_tmp
-        } else {
-            &pregenerated
-        };
-
-        if let Some(perlasm_format) = perlasm_format {
-            let perlasm_src_dsts =
-                perlasm_src_dsts(&asm_dir, target_arch, target_os, perlasm_format);
-            perlasm(&perlasm_src_dsts, target_arch, perlasm_format, None);
-
-            if target_os == Some(WINDOWS) {
-                let srcs = asm_srcs(perlasm_src_dsts);
-                for src in srcs {
-                    let obj_path = obj_path(&pregenerated, &src, MSVC_OBJ_EXT);
-                    run_command(nasm(&src, target_arch, &obj_path));
-                }
-            }
-        }
-    }
-}
-
-struct Target {
-    arch: String,
-    os: String,
-    env: String,
-    obj_ext: &'static str,
-    obj_opt: &'static str,
-    is_git: bool,
-    is_debug: bool,
-}
-
-fn build_c_code(target: &Target, pregenerated: PathBuf, out_dir: &Path) {
-    #[cfg(not(feature = "wasm32_c"))]
-    {
-        if &target.arch == "wasm32" {
-            return;
-        }
-    }
-
-    let includes_modified = RING_INCLUDES
-        .iter()
-        .chain(RING_BUILD_FILE.iter())
-        .chain(RING_PERL_INCLUDES.iter())
-        .map(|f| file_modified(Path::new(*f)))
-        .max()
-        .unwrap();
-
-    fn is_none_or_equals<T>(opt: Option<T>, other: T) -> bool
-    where
-        T: PartialEq,
-    {
-        if let Some(value) = opt {
-            value == other
-        } else {
-            true
-        }
-    }
-
-    let (_, _, perlasm_format) = ASM_TARGETS
-        .iter()
-        .find(|entry| {
-            let &(entry_arch, entry_os, _) = *entry;
-            entry_arch == target.arch && is_none_or_equals(entry_os, &target.os)
-        })
-        .unwrap();
-
-    let use_pregenerated = !target.is_git;
-    let warnings_are_errors = target.is_git;
-
-    let asm_dir = if use_pregenerated {
-        &pregenerated
-    } else {
-        out_dir
-    };
-
-    let asm_srcs = if let Some(perlasm_format) = perlasm_format {
-        let perlasm_src_dsts =
-            perlasm_src_dsts(asm_dir, &target.arch, Some(&target.os), perlasm_format);
-
-        if !use_pregenerated {
-            perlasm(
-                &perlasm_src_dsts[..],
-                &target.arch,
-                perlasm_format,
-                Some(includes_modified),
-            );
-        }
-
-        let mut asm_srcs = asm_srcs(perlasm_src_dsts);
-
-        // For Windows we also pregenerate the object files for non-Git builds so
-        // the user doesn't need to install the assembler. On other platforms we
-        // assume the C compiler also assembles.
-        if use_pregenerated && target.os == WINDOWS {
-            // The pregenerated object files always use ".obj" as the extension,
-            // even when the C/C++ compiler outputs files with the ".o" extension.
-            asm_srcs = asm_srcs
-                .iter()
-                .map(|src| obj_path(&pregenerated, src.as_path(), "obj"))
-                .collect::<Vec<_>>();
-        }
-
-        asm_srcs
-    } else {
-        Vec::new()
-    };
-
-    let core_srcs = sources_for_arch(&target.arch)
-        .into_iter()
-        .filter(|p| !is_perlasm(&p))
-        .collect::<Vec<_>>();
-
-    let test_srcs = RING_TEST_SRCS.iter().map(PathBuf::from).collect::<Vec<_>>();
-
-    let libs = [
-        ("ring-core", &core_srcs[..], &asm_srcs[..]),
-        ("ring-test", &test_srcs[..], &[]),
-    ];
-
-    // XXX: Ideally, ring-test would only be built for `cargo test`, but Cargo
-    // can't do that yet.
-    libs.iter().for_each(|&(lib_name, srcs, additional_srcs)| {
-        build_library(
-            &target,
-            &out_dir,
-            lib_name,
-            srcs,
-            additional_srcs,
-            warnings_are_errors,
-            includes_modified,
-        )
-    });
-
-    println!(
-        "cargo:rustc-link-search=native={}",
-        out_dir.to_str().expect("Invalid path")
-    );
-}
-
-fn build_library(
-    target: &Target,
-    out_dir: &Path,
-    lib_name: &str,
-    srcs: &[PathBuf],
-    additional_srcs: &[PathBuf],
-    warnings_are_errors: bool,
-    includes_modified: SystemTime,
-) {
-    // Compile all the (dirty) source files into object files.
-    let objs = additional_srcs
-        .iter()
-        .chain(srcs.iter())
-        .filter(|f| &target.env != "msvc" || f.extension().unwrap().to_str().unwrap() != "S")
-        .map(|f| compile(f, target, warnings_are_errors, out_dir, includes_modified))
-        .collect::<Vec<_>>();
-
-    // Rebuild the library if necessary.
-    let lib_path = PathBuf::from(out_dir).join(format!("lib{}.a", lib_name));
-
-    if objs
-        .iter()
-        .map(Path::new)
-        .any(|p| need_run(&p, &lib_path, includes_modified))
-    {
-        let mut c = cc::Build::new();
-
-        for f in LD_FLAGS {
-            let _ = c.flag(&f);
-        }
-        match target.os.as_str() {
-            "macos" => {
-                let _ = c.flag("-fPIC");
-                let _ = c.flag("-Wl,-dead_strip");
-            }
-            _ => {
-                let _ = c.flag("-Wl,--gc-sections");
-            }
-        }
-        for o in objs {
-            let _ = c.object(o);
-        }
-
-        // Handled below.
-        let _ = c.cargo_metadata(false);
-
-        c.compile(
-            lib_path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .expect("No filename"),
-        );
-    }
-
-    // Link the library. This works even when the library doesn't need to be
-    // rebuilt.
-    println!("cargo:rustc-link-lib=static={}", lib_name);
-}
-
-fn compile(
-    p: &Path,
-    target: &Target,
-    warnings_are_errors: bool,
-    out_dir: &Path,
-    includes_modified: SystemTime,
-) -> String {
-    let ext = p.extension().unwrap().to_str().unwrap();
-    if ext == "obj" {
-        p.to_str().expect("Invalid path").into()
-    } else {
-        let mut out_path = out_dir.join(p.file_name().unwrap());
-        assert!(out_path.set_extension(target.obj_ext));
-        if need_run(&p, &out_path, includes_modified) {
-            let cmd = if target.os != WINDOWS || ext != "asm" {
-                cc(p, ext, target, warnings_are_errors, &out_path)
-            } else {
-                nasm(p, &target.arch, &out_path)
-            };
-
-            run_command(cmd);
-        }
-        out_path.to_str().expect("Invalid path").into()
-    }
-}
-
-fn obj_path(out_dir: &Path, src: &Path, obj_ext: &str) -> PathBuf {
-    let mut out_path = out_dir.join(src.file_name().unwrap());
-    assert!(out_path.set_extension(obj_ext));
-    out_path
-}
-
-fn cc(
-    file: &Path,
-    ext: &str,
-    target: &Target,
-    warnings_are_errors: bool,
-    out_dir: &Path,
-) -> Command {
-    let is_musl = target.env.starts_with("musl");
-
-    let mut c = cc::Build::new();
-    let _ = c.include("include");
-    match ext {
-        "c" => {
-            for f in c_flags(target) {
-                let _ = c.flag(f);
-            }
-        }
-        "S" => (),
-        e => panic!("Unsupported file extension: {:?}", e),
-    };
-    for f in cpp_flags(target) {
-        let _ = c.flag(&f);
-    }
-    if target.os != "none"
-        && target.os != "redox"
-        && target.os != "windows"
-        && target.arch != "wasm32"
-    {
-        let _ = c.flag("-fstack-protector");
-    }
-
-    match (target.os.as_str(), target.env.as_str()) {
-        // ``-gfull`` is required for Darwin's |-dead_strip|.
-        ("macos", _) => {
-            let _ = c.flag("-gfull");
-        }
-        (_, "msvc") => (),
-        _ => {
-            let _ = c.flag("-g3");
-        }
-    };
-    if !target.is_debug {
-        let _ = c.define("NDEBUG", None);
-    }
-
-    if &target.env == "msvc" {
-        if std::env::var("OPT_LEVEL").unwrap() == "0" {
-            let _ = c.flag("/Od"); // Disable optimization for debug builds.
-                                   // run-time checking: (s)tack frame, (u)ninitialized variables
-            let _ = c.flag("/RTCsu");
-        } else {
-            let _ = c.flag("/Ox"); // Enable full optimization.
-        }
-    }
-
-    // Allow cross-compiling without a target sysroot for these targets.
-    //
-    // poly1305_vec.c requires <emmintrin.h> which requires <stdlib.h>.
-    if (target.arch == "wasm32" && target.os == "unknown")
-        || (target.os == "linux" && is_musl && target.arch != "x86_64")
-    {
-        if let Ok(compiler) = c.try_get_compiler() {
-            // TODO: Expand this to non-clang compilers in 0.17.0 if practical.
-            if compiler.is_like_clang() {
-                let _ = c.flag("-nostdlibinc");
-                let _ = c.define("GFp_NOSTDLIBINC", "1");
-            }
-        }
-    }
-
-    if warnings_are_errors {
-        let flag = if &target.env != "msvc" {
-            "-Werror"
-        } else {
-            "/WX"
-        };
-        let _ = c.flag(flag);
-    }
-    if is_musl {
-        // Some platforms enable _FORTIFY_SOURCE by default, but musl
-        // libc doesn't support it yet. See
-        // http://wiki.musl-libc.org/wiki/Future_Ideas#Fortify
-        // http://www.openwall.com/lists/musl/2015/02/04/3
-        // http://www.openwall.com/lists/musl/2015/06/17/1
-        let _ = c.flag("-U_FORTIFY_SOURCE");
-    }
-
-    let mut c = c.get_compiler().to_command();
-    let _ = c
-        .arg("-c")
-        .arg(format!(
-            "{}{}",
-            target.obj_opt,
-            out_dir.to_str().expect("Invalid path")
-        ))
-        .arg(file);
-    c
-}
-
-fn nasm(file: &Path, arch: &str, out_file: &Path) -> Command {
-    let oformat = match arch {
-        "x86_64" => ("win64"),
-        "x86" => ("win32"),
-        _ => panic!("unsupported arch: {}", arch),
-    };
-    let mut c = Command::new("./target/tools/nasm");
-    let _ = c
-        .arg("-o")
-        .arg(out_file.to_str().expect("Invalid path"))
-        .arg("-f")
-        .arg(oformat)
-        .arg("-Xgnu")
-        .arg("-gcv8")
-        .arg(file);
-    c
-}
-
-fn run_command_with_args<S>(command_name: S, args: &[String])
-where
-    S: AsRef<std::ffi::OsStr> + Copy,
-{
-    let mut cmd = Command::new(command_name);
-    let _ = cmd.args(args);
-    run_command(cmd)
-}
-
-fn run_command(mut cmd: Command) {
-    eprintln!("running {:?}", cmd);
-    let status = cmd.status().unwrap_or_else(|e| {
-        panic!("failed to execute [{:?}]: {}", cmd, e);
-    });
-    if !status.success() {
-        panic!("execution failed");
-    }
-}
-
-fn sources_for_arch(arch: &str) -> Vec<PathBuf> {
-    RING_SRCS
-        .iter()
-        .filter(|&&(archs, _)| archs.is_empty() || archs.contains(&arch))
-        .map(|&(_, p)| PathBuf::from(p))
-        .collect::<Vec<_>>()
-}
-
-fn perlasm_src_dsts(
-    out_dir: &Path,
-    arch: &str,
-    os: Option<&str>,
-    perlasm_format: &str,
-) -> Vec<(PathBuf, PathBuf)> {
-    let srcs = sources_for_arch(arch);
-    let mut src_dsts = srcs
-        .iter()
-        .filter(|p| is_perlasm(p))
-        .map(|src| (src.clone(), asm_path(out_dir, src, os, perlasm_format)))
-        .collect::<Vec<_>>();
-
-    // Some PerlAsm source files need to be run multiple times with different
-    // output paths.
-    {
-        // Appease the borrow checker.
-        let mut maybe_synthesize = |concrete, synthesized| {
-            let concrete_path = PathBuf::from(concrete);
-            if srcs.contains(&concrete_path) {
-                let synthesized_path = PathBuf::from(synthesized);
-                src_dsts.push((
-                    concrete_path,
-                    asm_path(out_dir, &synthesized_path, os, perlasm_format),
-                ))
-            }
-        };
-        maybe_synthesize(SHA512_X86_64, SHA256_X86_64);
-        maybe_synthesize(SHA512_ARMV8, SHA256_ARMV8);
-    }
-
-    src_dsts
-}
-
-fn asm_srcs(perlasm_src_dsts: Vec<(PathBuf, PathBuf)>) -> Vec<PathBuf> {
-    perlasm_src_dsts
-        .into_iter()
-        .map(|(_src, dst)| dst)
-        .collect::<Vec<_>>()
-}
-
-fn is_perlasm(path: &PathBuf) -> bool {
-    path.extension().unwrap().to_str().unwrap() == "pl"
-}
-
-fn asm_path(out_dir: &Path, src: &Path, os: Option<&str>, perlasm_format: &str) -> PathBuf {
-    let src_stem = src.file_stem().expect("source file without basename");
-
-    let dst_stem = src_stem.to_str().unwrap();
-    let dst_extension = if os == Some("windows") { "asm" } else { "S" };
-    let dst_filename = format!("{}-{}.{}", dst_stem, perlasm_format, dst_extension);
-    out_dir.join(dst_filename)
-}
-
-fn perlasm(
-    src_dst: &[(PathBuf, PathBuf)],
-    arch: &str,
-    perlasm_format: &str,
-    includes_modified: Option<SystemTime>,
-) {
-    for (src, dst) in src_dst {
-        if let Some(includes_modified) = includes_modified {
-            if !need_run(src, dst, includes_modified) {
-                continue;
-            }
-        }
-
-        let mut args = Vec::<String>::new();
-        args.push(src.to_string_lossy().into_owned());
-        args.push(perlasm_format.to_owned());
-        if arch == "x86" {
-            args.push("-fPIC".into());
-            args.push("-DOPENSSL_IA32_SSE2".into());
-        }
-        // Work around PerlAsm issue for ARM and AAarch64 targets by replacing
-        // back slashes with forward slashes.
-        let dst = dst
-            .to_str()
-            .expect("Could not convert path")
-            .replace("\\", "/");
-        args.push(dst);
-        run_command_with_args(&get_command("PERL_EXECUTABLE", "perl"), &args);
-    }
-}
-
-fn need_run(source: &Path, target: &Path, includes_modified: SystemTime) -> bool {
-    let s_modified = file_modified(source);
-    if let Ok(target_metadata) = std::fs::metadata(target) {
-        let target_modified = target_metadata.modified().unwrap();
-        s_modified >= target_modified || includes_modified >= target_modified
-    } else {
-        // On error fetching metadata for the target file, assume the target
-        // doesn't exist.
-        true
-    }
-}
-
-fn file_modified(path: &Path) -> SystemTime {
-    let path = Path::new(path);
-    let path_as_str = format!("{:?}", path);
-    std::fs::metadata(path)
-        .expect(&path_as_str)
-        .modified()
-        .expect("nah")
-}
-
-fn get_command(var: &str, default: &str) -> String {
-    std::env::var(var).unwrap_or_else(|_| default.into())
-}
-
-fn check_all_files_tracked() {
-    for path in &["crypto", "include", "third_party/fiat"] {
-        walk_dir(&PathBuf::from(path), &is_tracked);
-    }
-}
-
-fn is_tracked(file: &DirEntry) {
-    let p = file.path();
-    let cmp = |f| p == PathBuf::from(f);
-    let tracked = match p.extension().and_then(|p| p.to_str()) {
-        Some("h") | Some("inl") => RING_INCLUDES.iter().any(cmp),
-        Some("c") | Some("S") | Some("asm") => {
-            RING_SRCS.iter().any(|(_, f)| cmp(f)) || RING_TEST_SRCS.iter().any(cmp)
-        }
-        Some("pl") => RING_SRCS.iter().any(|(_, f)| cmp(f)) || RING_PERL_INCLUDES.iter().any(cmp),
-        _ => true,
-    };
-    if !tracked {
-        panic!("{:?} is not tracked in build.rs", p);
-    }
-}
-
-fn walk_dir<F>(dir: &Path, cb: &F)
-where
-    F: Fn(&DirEntry),
-{
-    if dir.is_dir() {
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_dir() {
-                walk_dir(&path, cb);
-            } else {
-                cb(&entry);
-            }
-        }
-    }
 }
 ========== build.rs from riscv-0.7.0 ============================================================
 extern crate riscv_target;
@@ -5158,7 +4826,7 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from serde-1.0.137 ============================================================
+========== build.rs from serde-1.0.139 ============================================================
 use std::env;
 use std::process::Command;
 use std::str::{self, FromStr};
@@ -5299,7 +4967,7 @@ fn rustc_minor_version() -> Option<u32> {
 
     u32::from_str(next).ok()
 }
-========== build.rs from serde_derive-1.0.137 ============================================================
+========== build.rs from serde_derive-1.0.139 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -5336,7 +5004,7 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from serde_json-1.0.81 ============================================================
+========== build.rs from serde_json-1.0.82 ============================================================
 use std::env;
 use std::process::Command;
 use std::str::{self, FromStr};
@@ -5440,6 +5108,115 @@ fn rustc_version() -> Option<Compiler> {
     let minor = pieces.next()?.parse().ok()?;
     let nightly = version.contains("nightly") || version.ends_with("-dev");
     Some(Compiler { minor, nightly })
+}
+========== build.rs from utralib-0.1.3 ============================================================
+use std::path::PathBuf;
+use std::env;
+use std::fs::OpenOptions;
+use std::io::Write;
+
+fn out_dir() -> PathBuf {
+    PathBuf::from(env::var_os("OUT_DIR").unwrap())
+}
+
+fn main() {
+    // ------ check that the feature flags are sane -----
+    #[cfg(
+        all(feature="precursor",
+            not(any(
+                    feature="precursor-c809403",
+                    feature="precursor-c809403-perflib"
+                )
+            )
+        )
+    )]
+    panic!("Precursor target specified, but no corresponding gitrev specified");
+
+    // this list grows O(N) as we add more targets. :-/ I don't know of a better way
+    // to express "only one of N should be selected" using cfg syntax
+    #[cfg(all(
+        feature="precursor",
+        any(feature="hosted", feature="renode")
+    ))]
+    panic!("Multiple targets specified. This is disallowed");
+    #[cfg(all(
+        feature="hosted",
+        any(feature="precursor", feature="renode")
+    ))]
+    panic!("Multiple targets specified. This is disallowed");
+    #[cfg(all(
+        feature="renode",
+        any(feature="precursor", feature="hosted")
+    ))]
+    panic!("Multiple targets specified. This is disallowed");
+
+    // also grows O(N) as we add more gitrevs
+    #[cfg(all(
+        feature="precursor-c809403",
+        feature="precursor-c809403-perflib"
+    ))]
+    panic!("Multiple gitrevs specified for Precursor target. This is disallowed");
+
+    // ----- select an SVD file based on a specific revision -----
+    #[cfg(feature="precursor-c809403")]
+    let svd_filename = "precursor/soc-c809403.svd";
+    #[cfg(feature="precursor-c809403")]
+    let generated_filename = "src/generated/precursor_c809403.rs";
+
+    #[cfg(feature="precursor-c809403-perflib")]
+    let svd_filename = "precursor/soc-perf-c809403.svd";
+    #[cfg(feature="precursor-c809403-perflib")]
+    let generated_filename = "src/generated/precursor_perf_c809403.rs";
+
+    #[cfg(feature="renode")]
+    let svd_filename = "renode/renode.svd";
+    #[cfg(feature="renode")]
+    let generated_filename = "src/generated/renode.rs";
+
+    // ----- control file generation and rebuild sequence -----
+    // check and see if the configuration has changed since the last build. This should be
+    // passed by the build system (e.g. xtask) if the feature is used.
+    #[cfg(not(feature="hosted"))]
+    {
+        let last_config = out_dir().join("../../LAST_CONFIG");
+        if last_config.exists() {
+            println!("cargo:rerun-if-changed={}", last_config.canonicalize().unwrap().display());
+        }
+        let svd_file_path = std::path::Path::new(&svd_filename);
+        println!("cargo:rerun-if-changed={}", svd_file_path.canonicalize().unwrap().display());
+
+        let src_file = std::fs::File::open(svd_filename).expect("couldn't open src file");
+        let mut dest_file = std::fs::File::create(generated_filename).expect("couldn't open dest file");
+        svd2utra::generate(src_file, &mut dest_file).unwrap();
+
+        // ----- feedback SVD path to build framework -----
+        // pass the computed SVD filename back to the build system, so that we can pass this
+        // on to the image creation program. This is necessary so we can extract all the memory
+        // regions and create the whitelist of memory pages allowed to the kernel; any page not
+        // explicitly used by the hardware model is ineligible for mapping and allocation by any
+        // process. This helps to prevent memory aliasing attacks by hardware blocks that partially
+        // decode their addresses (this would be in anticipation of potential hardware bugs; ideally
+        // this isn't ever a problem).
+        let svd_path = out_dir().join("../../SVD_PATH");
+        let mut svd_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(svd_path)
+            .unwrap();
+        write!(svd_file, "utralib/{}", svd_filename).unwrap();
+    }
+    #[cfg(feature="hosted")]
+    {
+        let svd_path = out_dir().join("../../SVD_PATH");
+        let mut svd_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(svd_path)
+            .unwrap();
+        write!(svd_file, "").unwrap(); // there is no SVD file for hosted mode
+    }
 }
 ========== build.rs from valuable-0.1.0 ============================================================
 #![warn(rust_2018_idioms, single_use_lifetimes)]
@@ -6313,6 +6090,61 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", Path::new(&dir).join("lib").display());
     }
 }
+========== build.rs from windows_aarch64_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "aarch64-pc-windows-msvc" && target != "aarch64-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_i686_gnu-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "i686-pc-windows-gnu" && target != "i686-uwp-windows-gnu" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_i686_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "i686-pc-windows-msvc" && target != "i686-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_x86_64_gnu-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-gnu" && target != "x86_64-uwp-windows-gnu" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_x86_64_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-msvc" && target != "x86_64-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
 ========== build.rs from x11-dl-2.19.1 ============================================================
 // x11-rs: Rust bindings for X11 libraries
 // The X11 libraries are available under the MIT license.
@@ -6367,5 +6199,69 @@ fn main() {
         println!("cargo:rustc-link-lib=dl");
     } else if target.contains("freebsd") || target.contains("dragonfly") {
         println!("cargo:rustc-link-lib=c");
+    }
+}
+========== build.rs from xous-0.9.13 ============================================================
+// NOTE: Adapted from cortex-m/build.rs
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+fn main() {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let target = env::var("TARGET").unwrap();
+    let name = env::var("CARGO_PKG_NAME").unwrap();
+
+    let target_os = target.split('-').nth(2).unwrap_or("none");
+
+    // If we're not running on a desktop-class operating system, emit the "baremetal"
+    // config setting. This will enable software to do tasks such as
+    // managing memory.
+    if target_os == "none" {
+        println!("Target {} is bare metal", target);
+        println!("cargo:rustc-cfg=baremetal");
+    } else {
+        println!("Target {} is NOT bare metal", target);
+    }
+
+    if target.starts_with("riscv") {
+        fs::copy(
+            format!("bin/{}.a", target),
+            out_dir.join(format!("lib{}.a", name)),
+        )
+        .expect("couldn't find asm support library for target platform");
+
+        println!("cargo:rustc-link-lib=static={}", name);
+        println!("cargo:rustc-link-search={}", out_dir.display());
+        println!("cargo:rerun-if-changed=bin/{}.a", target);
+    }
+
+    println!("cargo:rerun-if-changed=build.rs");
+}
+========== build.rs from xous-riscv-0.5.6 ============================================================
+use std::path::PathBuf;
+use std::{env, fs};
+
+fn main() {
+    let target = env::var("TARGET").unwrap();
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let name = env::var("CARGO_PKG_NAME").unwrap();
+
+    if target.starts_with("riscv") && env::var_os("CARGO_FEATURE_INLINE_ASM").is_none() {
+        fs::copy(
+            format!("bin/{}.a", target),
+            out_dir.join(format!("lib{}.a", name)),
+        ).unwrap();
+
+        println!("cargo:rustc-link-lib=static={}", name);
+        println!("cargo:rustc-link-search={}", out_dir.display());
+    }
+
+    if target.starts_with("riscv32") {
+        println!("cargo:rustc-cfg=riscv");
+        println!("cargo:rustc-cfg=riscv32");
+    } else if target.starts_with("riscv64") {
+        println!("cargo:rustc-cfg=riscv");
+        println!("cargo:rustc-cfg=riscv64");
     }
 }
