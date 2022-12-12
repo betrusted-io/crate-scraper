@@ -3370,7 +3370,7 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from proc-macro2-1.0.39 ============================================================
+========== build.rs from proc-macro2-1.0.47 ============================================================
 // rustc-cfg emitted by the build script:
 //
 // "use_proc_macro"
@@ -3457,6 +3457,10 @@ fn main() {
         println!("cargo:rustc-cfg=no_hygiene");
     }
 
+    if version.minor < 47 {
+        println!("cargo:rustc-cfg=no_ident_new_raw");
+    }
+
     if version.minor < 54 {
         println!("cargo:rustc-cfg=no_literal_from_str");
     }
@@ -3480,7 +3484,10 @@ fn main() {
         println!("cargo:rustc-cfg=wrap_proc_macro");
     }
 
-    if version.nightly && feature_allowed("proc_macro_span") {
+    if version.nightly
+        && feature_allowed("proc_macro_span")
+        && feature_allowed("proc_macro_span_shrink")
+    {
         println!("cargo:rustc-cfg=proc_macro_span");
     }
 
@@ -3640,6 +3647,45 @@ fn main() {
     cfg_rust_version();
     cfg_serde();
     write_version();
+}
+========== build.rs from quote-1.0.21 ============================================================
+use std::env;
+use std::process::{self, Command};
+use std::str;
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let version = match rustc_version() {
+        Some(version) => version,
+        None => return,
+    };
+
+    if version.minor < 31 {
+        eprintln!("Minimum supported rustc version is 1.31");
+        process::exit(1);
+    }
+
+    if version.minor < 53 {
+        // https://github.com/rust-lang/rust/issues/43081
+        println!("cargo:rustc-cfg=needs_invalid_span_workaround");
+    }
+}
+
+struct RustcVersion {
+    minor: u32,
+}
+
+fn rustc_version() -> Option<RustcVersion> {
+    let rustc = env::var_os("RUSTC")?;
+    let output = Command::new(rustc).arg("--version").output().ok()?;
+    let version = str::from_utf8(&output.stdout).ok()?;
+    let mut pieces = version.split('.');
+    if pieces.next() != Some("rustc 1") {
+        return None;
+    }
+    let minor = pieces.next()?.parse().ok()?;
+    Some(RustcVersion { minor })
 }
 ========== build.rs from radium-0.6.2 ============================================================
 //! Target detection
@@ -5057,7 +5103,7 @@ fn rustc_minor_version() -> Option<u32> {
     let next = pieces.next()?;
     u32::from_str(next).ok()
 }
-========== build.rs from syn-1.0.95 ============================================================
+========== build.rs from syn-1.0.103 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -5109,85 +5155,170 @@ fn rustc_version() -> Option<Compiler> {
     let nightly = version.contains("nightly") || version.ends_with("-dev");
     Some(Compiler { minor, nightly })
 }
-========== build.rs from utralib-0.1.3 ============================================================
-use std::path::PathBuf;
+========== build.rs from utralib-0.1.13 ============================================================
 use std::env;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 fn out_dir() -> PathBuf {
     PathBuf::from(env::var_os("OUT_DIR").unwrap())
 }
 
+/// Helper macro that returns a constant number of features enabled among specified list.
+macro_rules! count_enabled_features {
+    ($($feature:literal),*) => {
+        {
+            let mut enabled_features = 0;
+            $(
+                enabled_features += cfg!(feature = $feature) as u32;
+            )*
+            enabled_features
+        }
+    }
+}
+
+/// Helper macro that returns a compile-time error if multiple or none of the
+/// features of some caterogy are defined.
+///
+/// # Example
+///
+/// Given the following code:
+///
+/// ```
+/// allow_single_feature!("feature-category-name", "a", "b", "c");
+/// ```
+///
+/// These runs fail compilation check:
+/// $ cargo check --features a,b # error msg: 'Multiple feature-category-name specified. Only one is allowed.
+/// $ cargo check # error msg: 'None of the feature-category-name specified. Pick one.'
+///
+/// This compiles:
+/// $ cargo check --feature a
+macro_rules! allow_single_feature {
+    ($name:literal, $($feature:literal),*) => {
+        const _: () = {
+            const MSG_MULTIPLE: &str = concat!("\nMultiple ", $name, " specified. Only one is allowed.");
+            const MSG_NONE: &str = concat!("\nNone of the ", $name, " specified. Pick one.");
+
+            match count_enabled_features!($($feature),*) {
+                0 => std::panic!("{}", MSG_NONE),
+                1 => {}
+                2.. => std::panic!("{}", MSG_MULTIPLE),
+            }
+        };
+    }
+}
+
+macro_rules! allow_single_target_feature {
+    ($($args:tt)+) => {
+        allow_single_feature!("targets", $($args)+);
+    }
+}
+
+#[cfg(feature = "precursor")] // Gitrevs are only relevant for Precursor target
+macro_rules! allow_single_gitrev_feature {
+    ($($args:tt)+) => {
+        allow_single_feature!("gitrevs", $($args)+);
+    }
+}
+
 fn main() {
     // ------ check that the feature flags are sane -----
-    #[cfg(
-        all(feature="precursor",
-            not(any(
-                    feature="precursor-c809403",
-                    feature="precursor-c809403-perflib"
-                )
-            )
-        )
-    )]
-    panic!("Precursor target specified, but no corresponding gitrev specified");
+    // note on selecting "hosted" mode. An explicit "hosted" flag is provided to clarify
+    // the build system's intent. However, in general, most packages prefer to use this idiom:
+    //
+    // #[cfg(not(target_os = "xous"))]
+    //
+    // This flag is synonymous with feature = "hosted", and it also makes "hosted" mode the
+    // "default" package in the case that the code is being built in CI or in external
+    // packages that don't know to configure the "hosted" feature flag.
+    //
+    // This idiom breaks if Xous ever gets to the point of compiling and running code on
+    // its own platform; but generally, if the target binary is running on e.g. windows/linux/non-xous
+    // target triples, the user's intent was "hosted" mode.
+    //
+    // This script retains the use of an explicit "hosted" flag because we want to catch
+    // unintentional build system misconfigurations that meant to build for a target other
+    // than "hosted", rather than just falling back silently to defaults.
+    allow_single_target_feature!("precursor", "hosted", "renode");
 
-    // this list grows O(N) as we add more targets. :-/ I don't know of a better way
-    // to express "only one of N should be selected" using cfg syntax
-    #[cfg(all(
-        feature="precursor",
-        any(feature="hosted", feature="renode")
-    ))]
-    panic!("Multiple targets specified. This is disallowed");
-    #[cfg(all(
-        feature="hosted",
-        any(feature="precursor", feature="renode")
-    ))]
-    panic!("Multiple targets specified. This is disallowed");
-    #[cfg(all(
-        feature="renode",
-        any(feature="precursor", feature="hosted")
-    ))]
-    panic!("Multiple targets specified. This is disallowed");
-
-    // also grows O(N) as we add more gitrevs
-    #[cfg(all(
-        feature="precursor-c809403",
-        feature="precursor-c809403-perflib"
-    ))]
-    panic!("Multiple gitrevs specified for Precursor target. This is disallowed");
+    #[cfg(feature = "precursor")]
+    allow_single_gitrev_feature!(
+        "precursor-c809403",
+        "precursor-c809403-perflib",
+        "precursor-2753c12-dvt",
+        "precursor-a0912d6",
+        "precursor-70190e2"
+    );
 
     // ----- select an SVD file based on a specific revision -----
-    #[cfg(feature="precursor-c809403")]
+    #[cfg(feature = "precursor-c809403")]
     let svd_filename = "precursor/soc-c809403.svd";
-    #[cfg(feature="precursor-c809403")]
+    #[cfg(feature = "precursor-c809403")]
     let generated_filename = "src/generated/precursor_c809403.rs";
 
-    #[cfg(feature="precursor-c809403-perflib")]
+    #[cfg(feature = "precursor-a0912d6")]
+    let svd_filename = "precursor/soc-a0912d6.svd";
+    #[cfg(feature = "precursor-a0912d6")]
+    let generated_filename = "src/generated/precursor_a0912d6.rs";
+
+    #[cfg(feature = "precursor-c809403-perflib")]
     let svd_filename = "precursor/soc-perf-c809403.svd";
-    #[cfg(feature="precursor-c809403-perflib")]
+    #[cfg(feature = "precursor-c809403-perflib")]
     let generated_filename = "src/generated/precursor_perf_c809403.rs";
 
-    #[cfg(feature="renode")]
+    #[cfg(feature = "renode")]
     let svd_filename = "renode/renode.svd";
-    #[cfg(feature="renode")]
+    #[cfg(feature = "renode")]
     let generated_filename = "src/generated/renode.rs";
+
+    #[cfg(feature = "precursor-2753c12-dvt")]
+    let svd_filename = "precursor/soc-dvt-2753c12.svd";
+    #[cfg(feature = "precursor-2753c12-dvt")]
+    let generated_filename = "src/generated/precursor_dvt_2753c12.rs";
+
+    #[cfg(feature = "precursor-70190e2")]
+    let svd_filename = "precursor/soc-70190e2.svd";
+    #[cfg(feature = "precursor-70190e2")]
+    let generated_filename = "src/generated/precursor_70190e2.rs";
 
     // ----- control file generation and rebuild sequence -----
     // check and see if the configuration has changed since the last build. This should be
     // passed by the build system (e.g. xtask) if the feature is used.
-    #[cfg(not(feature="hosted"))]
+    //
+    // Debug this using:
+    //  $env:CARGO_LOG="cargo::core::compiler::fingerprint=info"
+    #[cfg(not(feature = "hosted"))]
     {
-        let last_config = out_dir().join("../../LAST_CONFIG");
-        if last_config.exists() {
-            println!("cargo:rerun-if-changed={}", last_config.canonicalize().unwrap().display());
-        }
         let svd_file_path = std::path::Path::new(&svd_filename);
-        println!("cargo:rerun-if-changed={}", svd_file_path.canonicalize().unwrap().display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            svd_file_path.canonicalize().unwrap().display()
+        );
 
+        // Regenerate the utra file in RAM.
         let src_file = std::fs::File::open(svd_filename).expect("couldn't open src file");
-        let mut dest_file = std::fs::File::create(generated_filename).expect("couldn't open dest file");
-        svd2utra::generate(src_file, &mut dest_file).unwrap();
+        let mut dest_vec = vec![];
+        svd2utra::generate(src_file, &mut dest_vec).unwrap();
+
+        // If the file exists, check to see if it is different from what we just generated.
+        // If not, skip writing the new file.
+        // If the file doesn't exist, or if it's different, write out a new utra file.
+        let should_write = if let Ok(mut existing_file) = std::fs::File::open(generated_filename) {
+            let mut existing_file_contents = vec![];
+            existing_file.read_to_end(&mut existing_file_contents).expect("couldn't read existing utra generated file");
+            existing_file_contents != dest_vec
+        } else {
+            true
+        };
+        if should_write {
+            let mut dest_file =
+                std::fs::File::create(generated_filename).expect("couldn't open dest file");
+            dest_file
+                .write_all(&dest_vec)
+                .expect("couldn't write contents to utra file");
+        }
 
         // ----- feedback SVD path to build framework -----
         // pass the computed SVD filename back to the build system, so that we can pass this
@@ -5206,7 +5337,7 @@ fn main() {
             .unwrap();
         write!(svd_file, "utralib/{}", svd_filename).unwrap();
     }
-    #[cfg(feature="hosted")]
+    #[cfg(feature = "hosted")]
     {
         let svd_path = out_dir().join("../../SVD_PATH");
         let mut svd_file = OpenOptions::new()
@@ -6201,7 +6332,7 @@ fn main() {
         println!("cargo:rustc-link-lib=c");
     }
 }
-========== build.rs from xous-0.9.13 ============================================================
+========== build.rs from xous-0.9.28 ============================================================
 // NOTE: Adapted from cortex-m/build.rs
 use std::env;
 use std::fs;
@@ -6211,18 +6342,6 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let target = env::var("TARGET").unwrap();
     let name = env::var("CARGO_PKG_NAME").unwrap();
-
-    let target_os = target.split('-').nth(2).unwrap_or("none");
-
-    // If we're not running on a desktop-class operating system, emit the "baremetal"
-    // config setting. This will enable software to do tasks such as
-    // managing memory.
-    if target_os == "none" {
-        println!("Target {} is bare metal", target);
-        println!("cargo:rustc-cfg=baremetal");
-    } else {
-        println!("Target {} is NOT bare metal", target);
-    }
 
     if target.starts_with("riscv") {
         fs::copy(
