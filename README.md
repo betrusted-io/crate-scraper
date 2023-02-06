@@ -31,3 +31,4 @@ Here's a log of all the times this has been run:
 - Jul 25 2022 - `xous-core` ec5cc29ccd4752f84077b5c502b960238a44835a - v0.9.9 tag+30 - hotfix for AES-KWP issue
 - Oct 10 2022 - `xous-core` 709ff8f9f22f870e13732930483d1c728d77b5b7 - v0.9.10 tag+13 - new release
 - Dec 13 2022 - `xous-core` 8e1d05020d1ed08cf46de0f0a015a44a6ed8fcac - v0.9.11 tag+3 - new release
+- Feb  6 2023 - `xous-core` ad5296e3b65f4d67c6611b2fd73f7403813ece53 - v0.9.12 tag+0 - new release
