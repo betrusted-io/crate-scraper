@@ -199,6 +199,96 @@ fn matches(pattern: &str, val: &str) -> bool {
         val == pattern
     }
 }
+========== build.rs from az-1.2.1 ============================================================
+// Copyright © 2019–2021 Trevor Spiteri
+
+// Copying and distribution of this file, with or without
+// modification, are permitted in any medium without royalty provided
+// the copyright notice and this notice are preserved. This file is
+// offered as-is, without any warranty.
+
+use std::{
+    env,
+    ffi::OsString,
+    fs::{self, File},
+    io::{Result as IoResult, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
+
+fn main() {
+    check_feature("track_caller", TRY_TRACK_CALLER);
+}
+
+fn check_feature(name: &str, contents: &str) {
+    let rustc = cargo_env("RUSTC");
+    let out_dir = PathBuf::from(cargo_env("OUT_DIR"));
+
+    let try_dir = out_dir.join(format!("try_{}", name));
+    let filename = format!("try_{}.rs", name);
+    create_dir_or_panic(&try_dir);
+    println!("$ cd {:?}", try_dir);
+    create_file_or_panic(&try_dir.join(&filename), contents);
+    let mut cmd = Command::new(&rustc);
+    cmd.current_dir(&try_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .args(&[&*filename, "--emit=dep-info,metadata"]);
+    println!("$ {:?} >& /dev/null", cmd);
+    let status = cmd
+        .status()
+        .unwrap_or_else(|_| panic!("Unable to execute: {:?}", cmd));
+    if status.success() {
+        println!("cargo:rustc-cfg={}", name);
+    }
+    if cfg!(target_os = "windows") {
+        // remove_dir_all started to fail on rustc 1.64.0-nightly
+        let _ = remove_dir(&try_dir);
+    } else {
+        remove_dir_or_panic(&try_dir);
+    }
+}
+
+fn cargo_env(name: &str) -> OsString {
+    env::var_os(name)
+        .unwrap_or_else(|| panic!("environment variable not found: {}, please use cargo", name))
+}
+
+fn remove_dir(dir: &Path) -> IoResult<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    assert!(dir.is_dir(), "Not a directory: {:?}", dir);
+    println!("$ rm -r {:?}", dir);
+    fs::remove_dir_all(dir)
+}
+
+fn remove_dir_or_panic(dir: &Path) {
+    remove_dir(dir).unwrap_or_else(|_| panic!("Unable to remove directory: {:?}", dir));
+}
+
+fn create_dir(dir: &Path) -> IoResult<()> {
+    println!("$ mkdir -p {:?}", dir);
+    fs::create_dir_all(dir)
+}
+
+fn create_dir_or_panic(dir: &Path) {
+    create_dir(dir).unwrap_or_else(|_| panic!("Unable to create directory: {:?}", dir));
+}
+
+fn create_file_or_panic(filename: &Path, contents: &str) {
+    println!("$ printf '%s' {:?}... > {:?}", &contents[0..10], filename);
+    let mut file =
+        File::create(filename).unwrap_or_else(|_| panic!("Unable to create file: {:?}", filename));
+    file.write_all(contents.as_bytes())
+        .unwrap_or_else(|_| panic!("Unable to write to file: {:?}", filename));
+}
+
+const TRY_TRACK_CALLER: &str = r#"// try_track_caller.rs
+#[track_caller]
+fn _tracked() {}
+fn main() {}
+"#;
 ========== build.rs from bare-metal-0.2.4 ============================================================
 extern crate rustc_version;
 
@@ -2856,7 +2946,41 @@ fn main() {
         });
         f.write_all(b.as_bytes()).unwrap();
     }
-}========== build.rs from proc-macro-error-1.0.4 ============================================================
+}========== build.rs from paste-1.0.12 ============================================================
+use std::env;
+use std::process::Command;
+use std::str;
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let version = match rustc_version() {
+        Some(version) => version,
+        None => return,
+    };
+
+    if version.minor < 54 {
+        // https://github.com/rust-lang/rust/pull/84717
+        println!("cargo:rustc-cfg=no_literal_fromstr");
+    }
+}
+
+struct RustcVersion {
+    minor: u32,
+}
+
+fn rustc_version() -> Option<RustcVersion> {
+    let rustc = env::var_os("RUSTC")?;
+    let output = Command::new(rustc).arg("--version").output().ok()?;
+    let version = str::from_utf8(&output.stdout).ok()?;
+    let mut pieces = version.split('.');
+    if pieces.next() != Some("rustc 1") {
+        return None;
+    }
+    let minor = pieces.next()?.parse().ok()?;
+    Some(RustcVersion { minor })
+}
+========== build.rs from proc-macro-error-1.0.4 ============================================================
 fn main() {
     if !version_check::is_feature_flaggable().unwrap_or(false) {
         println!("cargo:rustc-cfg=use_fallback");
@@ -4691,10 +4815,12 @@ fn rustc_version() -> Option<Compiler> {
     let nightly = version.contains("nightly") || version.ends_with("-dev");
     Some(Compiler { minor, nightly })
 }
-========== build.rs from utralib-0.1.13 ============================================================
+========== build.rs from utralib-0.1.18 ============================================================
 use std::env;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Write;
+#[cfg(not(feature = "hosted"))]
+use std::io::Read;
 use std::path::PathBuf;
 
 fn out_dir() -> PathBuf {
@@ -4715,7 +4841,7 @@ macro_rules! count_enabled_features {
 }
 
 /// Helper macro that returns a compile-time error if multiple or none of the
-/// features of some caterogy are defined.
+/// features of some category are defined.
 ///
 /// # Example
 ///
@@ -4777,47 +4903,40 @@ fn main() {
     // This script retains the use of an explicit "hosted" flag because we want to catch
     // unintentional build system misconfigurations that meant to build for a target other
     // than "hosted", rather than just falling back silently to defaults.
-    allow_single_target_feature!("precursor", "hosted", "renode");
+    allow_single_target_feature!("precursor", "hosted", "renode", "atsama5d27");
 
     #[cfg(feature = "precursor")]
     allow_single_gitrev_feature!(
-        "precursor-c809403",
-        "precursor-c809403-perflib",
-        "precursor-2753c12-dvt",
-        "precursor-a0912d6",
-        "precursor-70190e2"
+        "precursor-perflib",
+        "precursor-dvt",
+        "precursor-pvt"
     );
 
     // ----- select an SVD file based on a specific revision -----
-    #[cfg(feature = "precursor-c809403")]
-    let svd_filename = "precursor/soc-c809403.svd";
-    #[cfg(feature = "precursor-c809403")]
-    let generated_filename = "src/generated/precursor_c809403.rs";
-
-    #[cfg(feature = "precursor-a0912d6")]
-    let svd_filename = "precursor/soc-a0912d6.svd";
-    #[cfg(feature = "precursor-a0912d6")]
-    let generated_filename = "src/generated/precursor_a0912d6.rs";
-
-    #[cfg(feature = "precursor-c809403-perflib")]
-    let svd_filename = "precursor/soc-perf-c809403.svd";
-    #[cfg(feature = "precursor-c809403-perflib")]
-    let generated_filename = "src/generated/precursor_perf_c809403.rs";
+    #[cfg(feature = "precursor-perflib")]
+    let svd_filename = "precursor/soc-perf.svd";
+    #[cfg(feature = "precursor-perflib")]
+    let generated_filename = "src/generated/precursor_perf.rs";
 
     #[cfg(feature = "renode")]
     let svd_filename = "renode/renode.svd";
     #[cfg(feature = "renode")]
     let generated_filename = "src/generated/renode.rs";
 
-    #[cfg(feature = "precursor-2753c12-dvt")]
-    let svd_filename = "precursor/soc-dvt-2753c12.svd";
-    #[cfg(feature = "precursor-2753c12-dvt")]
-    let generated_filename = "src/generated/precursor_dvt_2753c12.rs";
+    #[cfg(feature = "precursor-dvt")]
+    let svd_filename = "precursor/soc-dvt.svd";
+    #[cfg(feature = "precursor-dvt")]
+    let generated_filename = "src/generated/precursor_dvt.rs";
 
-    #[cfg(feature = "precursor-70190e2")]
-    let svd_filename = "precursor/soc-70190e2.svd";
-    #[cfg(feature = "precursor-70190e2")]
-    let generated_filename = "src/generated/precursor_70190e2.rs";
+    #[cfg(feature = "precursor-pvt")]
+    let svd_filename = "precursor/soc-pvt.svd";
+    #[cfg(feature = "precursor")]
+    let generated_filename = "src/generated/precursor_pvt.rs";
+
+    #[cfg(feature = "atsama5d27")]
+    let svd_filename = "atsama5d/ATSAMA5D27.svd";
+    #[cfg(feature = "atsama5d27")]
+    let generated_filename = "src/generated/atsama5d27.rs";
 
     // ----- control file generation and rebuild sequence -----
     // check and see if the configuration has changed since the last build. This should be
@@ -4834,9 +4953,8 @@ fn main() {
         );
 
         // Regenerate the utra file in RAM.
-        let src_file = std::fs::File::open(svd_filename).expect("couldn't open src file");
         let mut dest_vec = vec![];
-        svd2utra::generate(src_file, &mut dest_vec).unwrap();
+        svd2utra::generate(svd_file_path, &mut dest_vec).unwrap();
 
         // If the file exists, check to see if it is different from what we just generated.
         // If not, skip writing the new file.
@@ -5868,7 +5986,7 @@ fn main() {
         println!("cargo:rustc-link-lib=c");
     }
 }
-========== build.rs from xous-0.9.33 ============================================================
+========== build.rs from xous-0.9.42 ============================================================
 // NOTE: Adapted from cortex-m/build.rs
 use std::env;
 use std::fs;
@@ -5879,7 +5997,7 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let name = env::var("CARGO_PKG_NAME").unwrap();
 
-    if target.starts_with("riscv") {
+    if target.starts_with("riscv") || target.starts_with("arm") {
         fs::copy(
             format!("bin/{}.a", target),
             out_dir.join(format!("lib{}.a", name)),
@@ -5918,5 +6036,16 @@ fn main() {
     } else if target.starts_with("riscv64") {
         println!("cargo:rustc-cfg=riscv");
         println!("cargo:rustc-cfg=riscv64");
+    }
+}
+========== build.rs from zstd-safe-5.0.2+zstd.1.5.2 ============================================================
+fn main() {
+    // Force the `std` feature in some cases
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    if target_arch == "wasm32" || target_os == "hermit" {
+        println!("cargo:rustc-cfg=feature=\"std\"");
     }
 }
