@@ -33,3 +33,4 @@ Here's a log of all the times this has been run:
 - Dec 13 2022 - `xous-core` 8e1d05020d1ed08cf46de0f0a015a44a6ed8fcac - v0.9.11 tag+3 - new release
 - Feb  6 2023 - `xous-core` ad5296e3b65f4d67c6611b2fd73f7403813ece53 - v0.9.12 tag+0 - new release
 - May  7 2023 - `xous-core` 874bb655df87d1426a8f48dae79485ea6f83d2cd - v0.9.13 tag+2 - new release
+- Aug  8 2023 - `xous-core` a735cfa60228b3758798e49056243c5f475d2e53 - v0.9.14 tag+5 - new release

@@ -1255,6 +1255,294 @@ fn main() {
 
     println!("cargo:rerun-if-changed=no_atomic.rs");
 }
+========== build.rs from crunchy-0.2.2 ============================================================
+use std::env;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+
+const LOWER_LIMIT: usize = 16;
+
+fn main() {
+    let limit = if cfg!(feature="limit_2048") {
+        2048
+    } else if cfg!(feature="limit_1024") {
+        1024
+    } else if cfg!(feature="limit_512") {
+        512
+    } else if cfg!(feature="limit_256") {
+        256
+    } else if cfg!(feature="limit_128") {
+        128
+    } else {
+        64
+    };
+
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("lib.rs");
+    let mut f = File::create(&dest_path).unwrap();
+
+    let mut output = String::new();
+
+    output.push_str(r#"
+/// Unroll the given for loop
+///
+/// Example:
+///
+/// ```ignore
+/// unroll! {
+///   for i in 0..5 {
+///     println!("Iteration {}", i);
+///   }
+/// }
+/// ```
+///
+/// will expand into:
+///
+/// ```ignore
+/// { println!("Iteration {}", 0); }
+/// { println!("Iteration {}", 1); }
+/// { println!("Iteration {}", 2); }
+/// { println!("Iteration {}", 3); }
+/// { println!("Iteration {}", 4); }
+/// ```
+#[macro_export]
+macro_rules! unroll {
+    (for $v:ident in 0..0 $c:block) => {};
+
+    (for $v:ident < $max:tt in ($start:tt..$end:tt).step_by($val:expr) {$($c:tt)*}) => {
+        {
+            let step = $val;
+            let start = $start;
+            let end = start + ($end - start) / step;
+            unroll! {
+                for val < $max in start..end {
+                    let $v: usize = ((val - start) * step) + start;
+
+                    $($c)*
+                }
+            }
+        }
+    };
+
+    (for $v:ident in ($start:tt..$end:tt).step_by($val:expr) {$($c:tt)*}) => {
+        unroll! {
+            for $v < $end in ($start..$end).step_by($val) {$($c)*}
+        }
+    };
+
+    (for $v:ident in ($start:tt..$end:tt) {$($c:tt)*}) => {
+        unroll!{
+            for $v in $start..$end {$($c)*}
+        }
+    };
+
+    (for $v:ident in $start:tt..$end:tt {$($c:tt)*}) => {
+        #[allow(non_upper_case_globals)]
+        #[allow(unused_comparisons)]
+        {
+            unroll!(@$v, 0, $end, {
+                    if $v >= $start {$($c)*}
+                }
+            );
+        }
+    };
+
+    (for $v:ident < $max:tt in $start:tt..$end:tt $c:block) => {
+        #[allow(non_upper_case_globals)]
+        {
+            let range = $start..$end;
+            assert!(
+                $max >= range.end,
+                "`{}` out of range `{:?}`",
+                stringify!($max),
+                range,
+            );
+            unroll!(
+                @$v,
+                0,
+                $max,
+                {
+                    if $v >= range.start && $v < range.end {
+                        $c
+                    }
+                }
+            );
+        }
+    };
+
+    (for $v:ident in 0..$end:tt {$($statement:tt)*}) => {
+        #[allow(non_upper_case_globals)]
+        { unroll!(@$v, 0, $end, {$($statement)*}); }
+    };
+
+"#);
+
+    for i in 0..limit + 1 {
+        output.push_str(format!("    (@$v:ident, $a:expr, {}, $c:block) => {{\n", i).as_str());
+
+        if i <= LOWER_LIMIT {
+            output.push_str(format!("        {{ const $v: usize = $a; $c }}\n").as_str());
+
+            for a in 1..i {
+                output.push_str(format!("        {{ const $v: usize = $a + {}; $c }}\n", a).as_str());
+            }
+        } else {
+            let half = i / 2;
+
+            if i % 2 == 0 {
+                output.push_str(format!("        unroll!(@$v, $a, {0}, $c);\n", half).as_str());
+                output.push_str(format!("        unroll!(@$v, $a + {0}, {0}, $c);\n", half).as_str());
+            } else {
+                if half > 1 {
+                    output.push_str(format!("        unroll!(@$v, $a, {}, $c);\n", i - 1).as_str())
+                }
+
+                output.push_str(format!("        {{ const $v: usize = $a + {}; $c }}\n", i - 1).as_str());
+            }
+        }
+
+        output.push_str("    };\n\n");
+    }
+
+    output.push_str("}\n\n");
+
+    output.push_str(format!(r#"
+#[cfg(all(test, feature = "std"))]
+mod tests {{
+    #[test]
+    fn invalid_range() {{
+        let mut a: Vec<usize> = vec![];
+        unroll! {{
+                for i in (5..4) {{
+                    a.push(i);
+                }}
+            }}
+        assert_eq!(a, vec![]);
+    }}
+
+    #[test]
+    fn start_at_one_with_step() {{
+        let mut a: Vec<usize> = vec![];
+        unroll! {{
+                for i in (2..4).step_by(1) {{
+                    a.push(i);
+                }}
+            }}
+        assert_eq!(a, vec![2, 3]);
+    }}
+
+    #[test]
+    fn start_at_one() {{
+        let mut a: Vec<usize> = vec![];
+        unroll! {{
+                for i in 1..4 {{
+                    a.push(i);
+                }}
+            }}
+        assert_eq!(a, vec![1, 2, 3]);
+    }}
+
+    #[test]
+    fn test_all() {{
+        {{
+            let a: Vec<usize> = vec![];
+            unroll! {{
+                for i in 0..0 {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (0..0).collect::<Vec<usize>>());
+        }}
+        {{
+            let mut a: Vec<usize> = vec![];
+            unroll! {{
+                for i in 0..1 {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (0..1).collect::<Vec<usize>>());
+        }}
+        {{
+            let mut a: Vec<usize> = vec![];
+            unroll! {{
+                for i in 0..{0} {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (0..{0}).collect::<Vec<usize>>());
+        }}
+        {{
+            let mut a: Vec<usize> = vec![];
+            let start = {0} / 4;
+            let end = start * 3;
+            unroll! {{
+                for i < {0} in start..end {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (start..end).collect::<Vec<usize>>());
+        }}
+        {{
+            let mut a: Vec<usize> = vec![];
+            unroll! {{
+                for i in (0..{0}).step_by(2) {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (0..{0} / 2).map(|x| x * 2).collect::<Vec<usize>>());
+        }}
+        {{
+            let mut a: Vec<usize> = vec![];
+            let start = {0} / 4;
+            let end = start * 3;
+            unroll! {{
+                for i < {0} in (start..end).step_by(2) {{
+                    a.push(i);
+                }}
+            }}
+            assert_eq!(a, (start..end).filter(|x| x % 2 == 0).collect::<Vec<usize>>());
+        }}
+    }}
+}}
+"#, limit).as_str());
+
+    f.write_all(output.as_bytes()).unwrap();
+}
+========== build.rs from defmt-0.3.5 ============================================================
+use std::{env, error::Error, fs, path::PathBuf};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Put the linker script somewhere the linker can find it
+    let out = &PathBuf::from(env::var("OUT_DIR")?);
+    let linker_script = fs::read_to_string("defmt.x.in")?;
+    fs::write(out.join("defmt.x"), linker_script)?;
+    println!("cargo:rustc-link-search={}", out.display());
+    let target = env::var("TARGET")?;
+
+    // `"atomic-cas": false` in `--print target-spec-json`
+    // last updated: rust 1.48.0
+    match &target[..] {
+        "avr-gnu-base"
+        | "msp430-none-elf"
+        | "riscv32i-unknown-none-elf"
+        | "riscv32imc-unknown-none-elf"
+        | "thumbv4t-none-eabi"
+        | "thumbv6m-none-eabi" => {
+            println!("cargo:rustc-cfg=no_cas");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+========== build.rs from defmt-macros-0.3.6 ============================================================
+fn main() {
+    println!("cargo:rerun-if-env-changed=DEFMT_LOG");
+}
+========== build.rs from errno-dragonfly-0.1.2 ============================================================
+fn main() {
+    cc::Build::new().file("src/errno.c").compile("liberrno.a");
+}
 ========== build.rs from eyre-0.6.8 ============================================================
 use std::env;
 use std::fs;
@@ -1993,20 +2281,56 @@ fn main() {
     }
     autocfg::rerun_path("build.rs");
 }
-========== build.rs from libc-0.2.126 ============================================================
+========== build.rs from libc-0.2.147 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
+use std::string::String;
+
+// List of cfgs this build script is allowed to set. The list is needed to support check-cfg, as we
+// need to know all the possible cfgs that this script will set. If you need to set another cfg
+// make sure to add it to this list as well.
+const ALLOWED_CFGS: &'static [&'static str] = &[
+    "freebsd10",
+    "freebsd11",
+    "freebsd12",
+    "freebsd13",
+    "freebsd14",
+    "libc_align",
+    "libc_cfg_target_vendor",
+    "libc_const_extern_fn",
+    "libc_const_extern_fn_unstable",
+    "libc_const_size_of",
+    "libc_core_cvoid",
+    "libc_deny_warnings",
+    "libc_int128",
+    "libc_long_array",
+    "libc_non_exhaustive",
+    "libc_packedN",
+    "libc_priv_mod_use",
+    "libc_ptr_addr_of",
+    "libc_thread_local",
+    "libc_underscore_const_names",
+    "libc_union",
+];
+
+// Extra values to allow for check-cfg.
+const CHECK_CFG_EXTRA: &'static [(&'static str, &'static [&'static str])] = &[
+    ("target_os", &["switch", "aix", "ohos"]),
+    ("target_env", &["illumos", "wasi", "aix", "ohos"]),
+    ("target_arch", &["loongarch64"]),
+];
 
 fn main() {
     // Avoid unnecessary re-building.
     println!("cargo:rerun-if-changed=build.rs");
 
-    let (rustc_minor_ver, is_nightly) = rustc_minor_nightly().expect("Failed to get rustc version");
+    let (rustc_minor_ver, is_nightly) = rustc_minor_nightly();
     let rustc_dep_of_std = env::var("CARGO_FEATURE_RUSTC_DEP_OF_STD").is_ok();
     let align_cargo_feature = env::var("CARGO_FEATURE_ALIGN").is_ok();
     let const_extern_fn_cargo_feature = env::var("CARGO_FEATURE_CONST_EXTERN_FN").is_ok();
     let libc_ci = env::var("LIBC_CI").is_ok();
+    let libc_check_cfg = env::var("LIBC_CHECK_CFG").is_ok();
 
     if env::var("CARGO_FEATURE_USE_STD").is_ok() {
         println!(
@@ -2021,103 +2345,139 @@ fn main() {
     // On CI, we detect the actual FreeBSD version and match its ABI exactly,
     // running tests to ensure that the ABI is correct.
     match which_freebsd() {
-        Some(10) if libc_ci || rustc_dep_of_std => {
-            println!("cargo:rustc-cfg=freebsd10")
-        }
-        Some(11) if libc_ci => println!("cargo:rustc-cfg=freebsd11"),
-        Some(12) if libc_ci => println!("cargo:rustc-cfg=freebsd12"),
-        Some(13) if libc_ci => println!("cargo:rustc-cfg=freebsd13"),
-        Some(14) if libc_ci => println!("cargo:rustc-cfg=freebsd14"),
-        Some(_) | None => println!("cargo:rustc-cfg=freebsd11"),
+        Some(10) if libc_ci || rustc_dep_of_std => set_cfg("freebsd10"),
+        Some(11) if libc_ci => set_cfg("freebsd11"),
+        Some(12) if libc_ci => set_cfg("freebsd12"),
+        Some(13) if libc_ci => set_cfg("freebsd13"),
+        Some(14) if libc_ci => set_cfg("freebsd14"),
+        Some(_) | None => set_cfg("freebsd11"),
     }
 
     // On CI: deny all warnings
     if libc_ci {
-        println!("cargo:rustc-cfg=libc_deny_warnings");
+        set_cfg("libc_deny_warnings");
     }
 
     // Rust >= 1.15 supports private module use:
     if rustc_minor_ver >= 15 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_priv_mod_use");
+        set_cfg("libc_priv_mod_use");
     }
 
     // Rust >= 1.19 supports unions:
     if rustc_minor_ver >= 19 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_union");
+        set_cfg("libc_union");
     }
 
     // Rust >= 1.24 supports const mem::size_of:
     if rustc_minor_ver >= 24 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_const_size_of");
+        set_cfg("libc_const_size_of");
     }
 
     // Rust >= 1.25 supports repr(align):
     if rustc_minor_ver >= 25 || rustc_dep_of_std || align_cargo_feature {
-        println!("cargo:rustc-cfg=libc_align");
+        set_cfg("libc_align");
     }
 
     // Rust >= 1.26 supports i128 and u128:
     if rustc_minor_ver >= 26 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_int128");
+        set_cfg("libc_int128");
     }
 
     // Rust >= 1.30 supports `core::ffi::c_void`, so libc can just re-export it.
     // Otherwise, it defines an incompatible type to retaining
     // backwards-compatibility.
     if rustc_minor_ver >= 30 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_core_cvoid");
+        set_cfg("libc_core_cvoid");
     }
 
     // Rust >= 1.33 supports repr(packed(N)) and cfg(target_vendor).
     if rustc_minor_ver >= 33 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_packedN");
-        println!("cargo:rustc-cfg=libc_cfg_target_vendor");
+        set_cfg("libc_packedN");
+        set_cfg("libc_cfg_target_vendor");
     }
 
     // Rust >= 1.40 supports #[non_exhaustive].
     if rustc_minor_ver >= 40 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_non_exhaustive");
+        set_cfg("libc_non_exhaustive");
+    }
+
+    // Rust >= 1.47 supports long array:
+    if rustc_minor_ver >= 47 || rustc_dep_of_std {
+        set_cfg("libc_long_array");
     }
 
     if rustc_minor_ver >= 51 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_ptr_addr_of");
+        set_cfg("libc_ptr_addr_of");
     }
 
     // Rust >= 1.37.0 allows underscores as anonymous constant names.
     if rustc_minor_ver >= 37 || rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_underscore_const_names");
+        set_cfg("libc_underscore_const_names");
     }
 
     // #[thread_local] is currently unstable
     if rustc_dep_of_std {
-        println!("cargo:rustc-cfg=libc_thread_local");
+        set_cfg("libc_thread_local");
     }
 
-    if const_extern_fn_cargo_feature {
-        if !is_nightly || rustc_minor_ver < 40 {
-            panic!("const-extern-fn requires a nightly compiler >= 1.40")
+    // Rust >= 1.62.0 allows to use `const_extern_fn` for "Rust" and "C".
+    if rustc_minor_ver >= 62 {
+        set_cfg("libc_const_extern_fn");
+    } else {
+        // Rust < 1.62.0 requires a crate feature and feature gate.
+        if const_extern_fn_cargo_feature {
+            if !is_nightly || rustc_minor_ver < 40 {
+                panic!("const-extern-fn requires a nightly compiler >= 1.40");
+            }
+            set_cfg("libc_const_extern_fn_unstable");
+            set_cfg("libc_const_extern_fn");
         }
-        println!("cargo:rustc-cfg=libc_const_extern_fn");
+    }
+
+    // check-cfg is a nightly cargo/rustc feature to warn when unknown cfgs are used across the
+    // codebase. libc can configure it if the appropriate environment variable is passed. Since
+    // rust-lang/rust enforces it, this is useful when using a custom libc fork there.
+    //
+    // https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#check-cfg
+    if libc_check_cfg {
+        for cfg in ALLOWED_CFGS {
+            println!("cargo:rustc-check-cfg=values({})", cfg);
+        }
+        for &(name, values) in CHECK_CFG_EXTRA {
+            let values = values.join("\",\"");
+            println!("cargo:rustc-check-cfg=values({},\"{}\")", name, values);
+        }
     }
 }
 
-fn rustc_minor_nightly() -> Option<(u32, bool)> {
+fn rustc_minor_nightly() -> (u32, bool) {
     macro_rules! otry {
         ($e:expr) => {
             match $e {
                 Some(e) => e,
-                None => return None,
+                None => panic!("Failed to get rustc version"),
             }
         };
     }
 
     let rustc = otry!(env::var_os("RUSTC"));
-    let output = otry!(Command::new(rustc).arg("--version").output().ok());
+    let output = Command::new(rustc)
+        .arg("--version")
+        .output()
+        .ok()
+        .expect("Failed to get rustc version");
+    if !output.status.success() {
+        panic!(
+            "failed to run rustc: {}",
+            String::from_utf8_lossy(output.stderr.as_slice())
+        );
+    }
+
     let version = otry!(str::from_utf8(&output.stdout).ok());
     let mut pieces = version.split('.');
 
     if pieces.next() != Some("rustc 1") {
-        return None;
+        panic!("Failed to get rustc version");
     }
 
     let minor = pieces.next();
@@ -2133,7 +2493,7 @@ fn rustc_minor_nightly() -> Option<(u32, bool)> {
         .unwrap_or(false);
     let minor = otry!(otry!(minor).parse().ok());
 
-    Some((minor, nightly))
+    (minor, nightly)
 }
 
 fn which_freebsd() -> Option<i32> {
@@ -2160,6 +2520,13 @@ fn which_freebsd() -> Option<i32> {
         s if s.starts_with("14") => Some(14),
         _ => None,
     }
+}
+
+fn set_cfg(cfg: &str) {
+    if !ALLOWED_CFGS.contains(&cfg) {
+        panic!("trying to set cfg {}, but it is not in ALLOWED_CFGS", cfg);
+    }
+    println!("cargo:rustc-cfg={}", cfg);
 }
 ========== build.rs from libm-0.1.4 ============================================================
 use std::env;
@@ -2833,6 +3200,95 @@ use autocfg;
 fn main() {
     autocfg::new().emit_sysroot_crate("alloc");
 }
+========== build.rs from num-bigint-0.4.3 ============================================================
+use std::env;
+use std::error::Error;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+
+fn main() {
+    let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH");
+    let u64_digit = pointer_width.as_ref().map(String::as_str) == Ok("64");
+    if u64_digit {
+        autocfg::emit("u64_digit");
+    }
+    let ac = autocfg::new();
+    let std = if ac.probe_sysroot_crate("std") {
+        "std"
+    } else {
+        "core"
+    };
+    if ac.probe_path(&format!("{}::convert::TryFrom", std)) {
+        autocfg::emit("has_try_from");
+    }
+
+    if let Ok(target_arch) = env::var("CARGO_CFG_TARGET_ARCH") {
+        if target_arch == "x86_64" || target_arch == "x86" {
+            let digit = if u64_digit { "u64" } else { "u32" };
+
+            let addcarry = format!("{}::arch::{}::_addcarry_{}", std, target_arch, digit);
+            if ac.probe_path(&addcarry) {
+                autocfg::emit("use_addcarry");
+            }
+        }
+    }
+
+    autocfg::rerun_path("build.rs");
+
+    write_radix_bases().unwrap();
+}
+
+/// Write tables of the greatest power of each radix for the given bit size.  These are returned
+/// from `biguint::get_radix_base` to batch the multiplication/division of radix conversions on
+/// full `BigUint` values, operating on primitive integers as much as possible.
+///
+/// e.g. BASES_16[3] = (59049, 10) // 3¹⁰ fits in u16, but 3¹¹ is too big
+///      BASES_32[3] = (3486784401, 20)
+///      BASES_64[3] = (12157665459056928801, 40)
+///
+/// Powers of two are not included, just zeroed, as they're implemented with shifts.
+fn write_radix_bases() -> Result<(), Box<dyn Error>> {
+    let out_dir = env::var("OUT_DIR")?;
+    let dest_path = Path::new(&out_dir).join("radix_bases.rs");
+    let mut f = File::create(&dest_path)?;
+
+    for &bits in &[16, 32, 64] {
+        let max = if bits < 64 {
+            (1 << bits) - 1
+        } else {
+            std::u64::MAX
+        };
+
+        writeln!(f, "#[deny(overflowing_literals)]")?;
+        writeln!(
+            f,
+            "pub(crate) static BASES_{bits}: [(u{bits}, usize); 257] = [",
+            bits = bits
+        )?;
+        for radix in 0u64..257 {
+            let (base, power) = if radix == 0 || radix.is_power_of_two() {
+                (0, 0)
+            } else {
+                let mut power = 1;
+                let mut base = radix;
+
+                while let Some(b) = base.checked_mul(radix) {
+                    if b > max {
+                        break;
+                    }
+                    base = b;
+                    power += 1;
+                }
+                (base, power)
+            };
+            writeln!(f, "    ({}, {}), // {}", base, power, radix)?;
+        }
+        writeln!(f, "];")?;
+    }
+
+    Ok(())
+}
 ========== build.rs from num-integer-0.1.45 ============================================================
 extern crate autocfg;
 
@@ -2906,6 +3362,22 @@ fn main() {
 
     autocfg::rerun_path("build.rs");
 }
+========== build.rs from oid-registry-0.6.1 ============================================================
+use std::env;
+
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/load.rs"));
+
+fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed=assets/oid_db.txt");
+
+    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("oid_db.rs");
+
+    let m = load_file("assets/oid_db.txt")?;
+    generate_file(&m, dest_path)?;
+
+    Ok(())
+}
 ========== build.rs from packed_simd_2-0.3.7 ============================================================
 fn main() {
     let target = std::env::var("TARGET").expect("TARGET environment variable not defined");
@@ -2946,7 +3418,18 @@ fn main() {
         });
         f.write_all(b.as_bytes()).unwrap();
     }
-}========== build.rs from paste-1.0.12 ============================================================
+}========== build.rs from parking_lot_core-0.9.8 ============================================================
+// Automatically detect tsan in a way that's compatible with both stable (which
+// doesn't support sanitizers) and nightly (which does). Works because build
+// scripts gets `cfg` info, even if the cfg is unstable.
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let santizer_list = std::env::var("CARGO_CFG_SANITIZE").unwrap_or_default();
+    if santizer_list.contains("thread") {
+        println!("cargo:rustc-cfg=tsan_enabled");
+    }
+}
+========== build.rs from paste-1.0.12 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -2979,6 +3462,10 @@ fn rustc_version() -> Option<RustcVersion> {
     }
     let minor = pieces.next()?.parse().ok()?;
     Some(RustcVersion { minor })
+}
+========== build.rs from pio-parser-0.2.2 ============================================================
+fn main() {
+    lalrpop::process_root().unwrap();
 }
 ========== build.rs from proc-macro-error-1.0.4 ============================================================
 fn main() {
@@ -3030,14 +3517,8 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from proc-macro2-1.0.47 ============================================================
+========== build.rs from proc-macro2-1.0.63 ============================================================
 // rustc-cfg emitted by the build script:
-//
-// "use_proc_macro"
-//     Link to extern crate proc_macro. Available on any compiler and any target
-//     except wasm32. Requires "proc-macro" Cargo cfg to be enabled (default is
-//     enabled). On wasm32 we never link to proc_macro even if "proc-macro" cfg
-//     is enabled.
 //
 // "wrap_proc_macro"
 //     Wrap types from libproc_macro rather than polyfilling the whole API.
@@ -3076,14 +3557,15 @@ fn rustc_minor_version() -> Option<u32> {
 use std::env;
 use std::process::{self, Command};
 use std::str;
+use std::u32;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    let version = match rustc_version() {
-        Some(version) => version,
-        None => return,
-    };
+    let version = rustc_version().unwrap_or(RustcVersion {
+        minor: u32::MAX,
+        nightly: false,
+    });
 
     if version.minor < 31 {
         eprintln!("Minimum supported rustc version is 1.31");
@@ -3103,6 +3585,10 @@ fn main() {
 
     if version.minor < 32 {
         println!("cargo:rustc-cfg=no_libprocmacro_unwind_safe");
+    }
+
+    if version.minor < 34 {
+        println!("cargo:rustc-cfg=no_try_from");
     }
 
     if version.minor < 39 {
@@ -3133,37 +3619,25 @@ fn main() {
         println!("cargo:rustc-cfg=no_is_available");
     }
 
-    let target = env::var("TARGET").unwrap();
-    if !enable_use_proc_macro(&target) {
-        return;
+    if version.minor < 66 {
+        println!("cargo:rustc-cfg=no_source_text");
     }
 
-    println!("cargo:rustc-cfg=use_proc_macro");
+    if !cfg!(feature = "proc-macro") {
+        return;
+    }
 
     if version.nightly || !semver_exempt {
         println!("cargo:rustc-cfg=wrap_proc_macro");
     }
 
-    if version.nightly
-        && feature_allowed("proc_macro_span")
-        && feature_allowed("proc_macro_span_shrink")
-    {
+    if version.nightly && feature_allowed("proc_macro_span") {
         println!("cargo:rustc-cfg=proc_macro_span");
     }
 
     if semver_exempt && version.nightly {
         println!("cargo:rustc-cfg=super_unstable");
     }
-}
-
-fn enable_use_proc_macro(target: &str) -> bool {
-    // wasm targets don't have the `proc_macro` crate, disable this feature.
-    if target.contains("wasm32") {
-        return false;
-    }
-
-    // Otherwise, only enable it if our feature is actually enabled.
-    cfg!(feature = "proc-macro")
 }
 
 struct RustcVersion {
@@ -3308,7 +3782,7 @@ fn main() {
     cfg_serde();
     write_version();
 }
-========== build.rs from quote-1.0.21 ============================================================
+========== build.rs from quote-1.0.29 ============================================================
 use std::env;
 use std::process::{self, Command};
 use std::str;
@@ -3534,7 +4008,234 @@ fn main() {
         println!("cargo:rustc-cfg=rkyv_atomic");
     }
 }
+========== build.rs from rustix-0.38.4 ============================================================
+use std::env::var;
+use std::io::Write;
+
+/// The directory for inline asm.
+const ASM_PATH: &str = "src/backend/linux_raw/arch/asm";
+
+fn main() {
+    // Don't rerun this on changes other than build.rs, as we only depend on
+    // the rustc version.
+    println!("cargo:rerun-if-changed=build.rs");
+
+    use_feature_or_nothing("rustc_attrs");
+
+    // Features only used in no-std configurations.
+    #[cfg(not(feature = "std"))]
+    {
+        use_feature_or_nothing("core_c_str");
+        use_feature_or_nothing("core_ffi_c");
+        use_feature_or_nothing("alloc_c_string");
+        use_feature_or_nothing("alloc_ffi");
+    }
+
+    // Gather target information.
+    let arch = var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let inline_asm_name = format!("{}/{}.rs", ASM_PATH, arch);
+    let inline_asm_name_present = std::fs::metadata(inline_asm_name).is_ok();
+    let target_os = var("CARGO_CFG_TARGET_OS").unwrap();
+    let pointer_width = var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
+    let endian = var("CARGO_CFG_TARGET_ENDIAN").unwrap();
+
+    // Check for special target variants.
+    let is_x32 = arch == "x86_64" && pointer_width == "32";
+    let is_arm64_ilp32 = arch == "aarch64" && pointer_width == "32";
+    let is_powerpc64be = arch == "powerpc64" && endian == "big";
+    let is_mipseb = arch == "mips" && endian == "big";
+    let is_mips64eb = arch == "mips64" && endian == "big";
+    let is_unsupported_abi = is_x32 || is_arm64_ilp32 || is_powerpc64be || is_mipseb || is_mips64eb;
+
+    // Check for `--features=use-libc`. This allows crate users to enable the
+    // libc backend.
+    let feature_use_libc = var("CARGO_FEATURE_USE_LIBC").is_ok();
+
+    // Check for `RUSTFLAGS=--cfg=rustix_use_libc`. This allows end users to
+    // enable the libc backend even if rustix is depended on transitively.
+    let cfg_use_libc = var("CARGO_CFG_RUSTIX_USE_LIBC").is_ok();
+
+    // Check for eg. `RUSTFLAGS=--cfg=rustix_use_experimental_asm`. This is a
+    // rustc flag rather than a cargo feature flag because it's experimental
+    // and not something we want accidentally enabled via `--all-features`.
+    let rustix_use_experimental_asm = var("CARGO_CFG_RUSTIX_USE_EXPERIMENTAL_ASM").is_ok();
+
+    // Miri doesn't support inline asm, and has builtin support for recognizing
+    // libc FFI calls, so if we're running under miri, use the libc backend.
+    let miri = var("CARGO_CFG_MIRI").is_ok();
+
+    // If the libc backend is requested, or if we're not on a platform for
+    // which we have linux_raw support, use the libc backend.
+    //
+    // For now Android uses the libc backend; in theory it could use the
+    // linux_raw backend, but to do that we'll need to figure out how to
+    // install the toolchain for it.
+    if feature_use_libc
+        || cfg_use_libc
+        || target_os != "linux"
+        || !inline_asm_name_present
+        || is_unsupported_abi
+        || miri
+        || ((arch == "powerpc64" || arch == "mips" || arch == "mips64")
+            && !rustix_use_experimental_asm)
+    {
+        // Use the libc backend.
+        use_feature("libc");
+    } else {
+        // Use the linux_raw backend.
+        use_feature("linux_raw");
+        use_feature_or_nothing("core_intrinsics");
+        if rustix_use_experimental_asm {
+            use_feature("asm_experimental_arch");
+        }
+    }
+
+    // Detect whether the compiler requires us to use thumb mode on ARM.
+    if arch == "arm" && use_thumb_mode() {
+        use_feature("thumb_mode");
+    }
+
+    // Rust's libc crate groups some OS's together which have similar APIs;
+    // create similarly-named features to make `cfg` tests more concise.
+    if target_os == "freebsd" || target_os == "dragonfly" {
+        use_feature("freebsdlike");
+    }
+    if target_os == "openbsd" || target_os == "netbsd" {
+        use_feature("netbsdlike");
+    }
+    if target_os == "macos" || target_os == "ios" || target_os == "tvos" || target_os == "watchos" {
+        use_feature("apple");
+    }
+    if target_os == "linux"
+        || target_os == "l4re"
+        || target_os == "android"
+        || target_os == "emscripten"
+    {
+        use_feature("linux_like");
+    }
+    if target_os == "solaris" || target_os == "illumos" {
+        use_feature("solarish");
+    }
+    if target_os == "macos"
+        || target_os == "ios"
+        || target_os == "tvos"
+        || target_os == "watchos"
+        || target_os == "freebsd"
+        || target_os == "dragonfly"
+        || target_os == "openbsd"
+        || target_os == "netbsd"
+    {
+        use_feature("bsd");
+    }
+
+    // Add some additional common target combinations.
+    if target_os == "android" || target_os == "linux" {
+        use_feature("linux_kernel");
+    }
+
+    if target_os == "wasi" {
+        use_feature_or_nothing("wasi_ext");
+    }
+
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_RUSTIX_USE_EXPERIMENTAL_ASM");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_RUSTIX_USE_LIBC");
+
+    // Rerun this script if any of our features or configuration flags change,
+    // or if the toolchain we used for feature detection changes.
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_USE_LIBC");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_RUSTC_DEP_OF_STD");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_MIRI");
+}
+
+fn use_thumb_mode() -> bool {
+    // In thumb mode, r7 is reserved.
+    !can_compile("pub unsafe fn f() { core::arch::asm!(\"udf #16\", in(\"r7\") 0); }")
+}
+
+fn use_feature_or_nothing(feature: &str) {
+    if has_feature(feature) {
+        use_feature(feature);
+    }
+}
+
+fn use_feature(feature: &str) {
+    println!("cargo:rustc-cfg={}", feature);
+}
+
+/// Test whether the rustc at `var("RUSTC")` supports the given feature.
+fn has_feature(feature: &str) -> bool {
+    can_compile(format!(
+        "#![allow(stable_features)]\n#![feature({})]",
+        feature
+    ))
+}
+
+/// Test whether the rustc at `var("RUSTC")` can compile the given code.
+fn can_compile<T: AsRef<str>>(test: T) -> bool {
+    use std::process::Stdio;
+
+    let out_dir = var("OUT_DIR").unwrap();
+    let rustc = var("RUSTC").unwrap();
+    let target = var("TARGET").unwrap();
+
+    // Use `RUSTC_WRAPPER` if it's set, unless it's set to an empty string, as
+    // documented [here].
+    // [here]: https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-reads
+    let wrapper = var("RUSTC_WRAPPER")
+        .ok()
+        .and_then(|w| if w.is_empty() { None } else { Some(w) });
+
+    let mut cmd = if let Some(wrapper) = wrapper {
+        let mut cmd = std::process::Command::new(wrapper);
+        // The wrapper's first argument is supposed to be the path to rustc.
+        cmd.arg(rustc);
+        cmd
+    } else {
+        std::process::Command::new(rustc)
+    };
+
+    cmd.arg("--crate-type=rlib") // Don't require `main`.
+        .arg("--emit=metadata") // Do as little as possible but still parse.
+        .arg("--target")
+        .arg(target)
+        .arg("--out-dir")
+        .arg(out_dir); // Put the output somewhere inconsequential.
+
+    // If Cargo wants to set RUSTFLAGS, use that.
+    if let Ok(rustflags) = var("CARGO_ENCODED_RUSTFLAGS") {
+        if !rustflags.is_empty() {
+            for arg in rustflags.split('\x1f') {
+                cmd.arg(arg);
+            }
+        }
+    }
+
+    let mut child = cmd
+        .arg("-") // Read from stdin.
+        .stdin(Stdio::piped()) // Stdin is a pipe.
+        .stderr(Stdio::null()) // Errors from feature detection aren't interesting and can be confusing.
+        .spawn()
+        .unwrap();
+
+    writeln!(child.stdin.take().unwrap(), "{}", test.as_ref()).unwrap();
+
+    child.wait().unwrap().success()
+}
 ========== build.rs from rustls-0.20.6 ============================================================
+/// This build script allows us to enable the `read_buf` language feature only
+/// for Rust Nightly.
+///
+/// See the comment in lib.rs to understand why we need this.
+
+#[cfg_attr(feature = "read_buf", rustversion::not(nightly))]
+fn main() {}
+
+#[cfg(feature = "read_buf")]
+#[rustversion::nightly]
+fn main() {
+    println!("cargo:rustc-cfg=read_buf");
+}
+========== build.rs from rustls-0.21.2 ============================================================
 /// This build script allows us to enable the `read_buf` language feature only
 /// for Rust Nightly.
 ///
@@ -4815,193 +5516,28 @@ fn rustc_version() -> Option<Compiler> {
     let nightly = version.contains("nightly") || version.ends_with("-dev");
     Some(Compiler { minor, nightly })
 }
-========== build.rs from utralib-0.1.18 ============================================================
-use std::env;
-use std::fs::OpenOptions;
-use std::io::Write;
-#[cfg(not(feature = "hosted"))]
-use std::io::Read;
-use std::path::PathBuf;
-
-fn out_dir() -> PathBuf {
-    PathBuf::from(env::var_os("OUT_DIR").unwrap())
-}
-
-/// Helper macro that returns a constant number of features enabled among specified list.
-macro_rules! count_enabled_features {
-    ($($feature:literal),*) => {
-        {
-            let mut enabled_features = 0;
-            $(
-                enabled_features += cfg!(feature = $feature) as u32;
-            )*
-            enabled_features
-        }
-    }
-}
-
-/// Helper macro that returns a compile-time error if multiple or none of the
-/// features of some category are defined.
-///
-/// # Example
-///
-/// Given the following code:
-///
-/// ```
-/// allow_single_feature!("feature-category-name", "a", "b", "c");
-/// ```
-///
-/// These runs fail compilation check:
-/// $ cargo check --features a,b # error msg: 'Multiple feature-category-name specified. Only one is allowed.
-/// $ cargo check # error msg: 'None of the feature-category-name specified. Pick one.'
-///
-/// This compiles:
-/// $ cargo check --feature a
-macro_rules! allow_single_feature {
-    ($name:literal, $($feature:literal),*) => {
-        const _: () = {
-            const MSG_MULTIPLE: &str = concat!("\nMultiple ", $name, " specified. Only one is allowed.");
-            const MSG_NONE: &str = concat!("\nNone of the ", $name, " specified. Pick one.");
-
-            match count_enabled_features!($($feature),*) {
-                0 => std::panic!("{}", MSG_NONE),
-                1 => {}
-                2.. => std::panic!("{}", MSG_MULTIPLE),
-            }
-        };
-    }
-}
-
-macro_rules! allow_single_target_feature {
-    ($($args:tt)+) => {
-        allow_single_feature!("targets", $($args)+);
-    }
-}
-
-#[cfg(feature = "precursor")] // Gitrevs are only relevant for Precursor target
-macro_rules! allow_single_gitrev_feature {
-    ($($args:tt)+) => {
-        allow_single_feature!("gitrevs", $($args)+);
-    }
-}
+========== build.rs from tiny-keccak-2.0.2 ============================================================
+#[cfg(not(any(
+    feature = "keccak",
+    feature = "shake",
+    feature = "sha3",
+    feature = "cshake",
+    feature = "kmac",
+    feature = "tuple_hash",
+    feature = "parallel_hash",
+    feature = "k12",
+    feature = "fips202",
+    feature = "sp800"
+)))]
+compile_error!(
+    "You need to specify at least one hash function you intend to use. \
+    Available options:\n\
+    keccak, shake, sha3, cshake, kmac, tuple_hash, parallel_hash, k12, fips202, sp800\n\
+    e.g.\n\
+    tiny-keccak = { version = \"2.0.0\", features = [\"sha3\"] }"
+);
 
 fn main() {
-    // ------ check that the feature flags are sane -----
-    // note on selecting "hosted" mode. An explicit "hosted" flag is provided to clarify
-    // the build system's intent. However, in general, most packages prefer to use this idiom:
-    //
-    // #[cfg(not(target_os = "xous"))]
-    //
-    // This flag is synonymous with feature = "hosted", and it also makes "hosted" mode the
-    // "default" package in the case that the code is being built in CI or in external
-    // packages that don't know to configure the "hosted" feature flag.
-    //
-    // This idiom breaks if Xous ever gets to the point of compiling and running code on
-    // its own platform; but generally, if the target binary is running on e.g. windows/linux/non-xous
-    // target triples, the user's intent was "hosted" mode.
-    //
-    // This script retains the use of an explicit "hosted" flag because we want to catch
-    // unintentional build system misconfigurations that meant to build for a target other
-    // than "hosted", rather than just falling back silently to defaults.
-    allow_single_target_feature!("precursor", "hosted", "renode", "atsama5d27");
-
-    #[cfg(feature = "precursor")]
-    allow_single_gitrev_feature!(
-        "precursor-perflib",
-        "precursor-dvt",
-        "precursor-pvt"
-    );
-
-    // ----- select an SVD file based on a specific revision -----
-    #[cfg(feature = "precursor-perflib")]
-    let svd_filename = "precursor/soc-perf.svd";
-    #[cfg(feature = "precursor-perflib")]
-    let generated_filename = "src/generated/precursor_perf.rs";
-
-    #[cfg(feature = "renode")]
-    let svd_filename = "renode/renode.svd";
-    #[cfg(feature = "renode")]
-    let generated_filename = "src/generated/renode.rs";
-
-    #[cfg(feature = "precursor-dvt")]
-    let svd_filename = "precursor/soc-dvt.svd";
-    #[cfg(feature = "precursor-dvt")]
-    let generated_filename = "src/generated/precursor_dvt.rs";
-
-    #[cfg(feature = "precursor-pvt")]
-    let svd_filename = "precursor/soc-pvt.svd";
-    #[cfg(feature = "precursor")]
-    let generated_filename = "src/generated/precursor_pvt.rs";
-
-    #[cfg(feature = "atsama5d27")]
-    let svd_filename = "atsama5d/ATSAMA5D27.svd";
-    #[cfg(feature = "atsama5d27")]
-    let generated_filename = "src/generated/atsama5d27.rs";
-
-    // ----- control file generation and rebuild sequence -----
-    // check and see if the configuration has changed since the last build. This should be
-    // passed by the build system (e.g. xtask) if the feature is used.
-    //
-    // Debug this using:
-    //  $env:CARGO_LOG="cargo::core::compiler::fingerprint=info"
-    #[cfg(not(feature = "hosted"))]
-    {
-        let svd_file_path = std::path::Path::new(&svd_filename);
-        println!(
-            "cargo:rerun-if-changed={}",
-            svd_file_path.canonicalize().unwrap().display()
-        );
-
-        // Regenerate the utra file in RAM.
-        let mut dest_vec = vec![];
-        svd2utra::generate(svd_file_path, &mut dest_vec).unwrap();
-
-        // If the file exists, check to see if it is different from what we just generated.
-        // If not, skip writing the new file.
-        // If the file doesn't exist, or if it's different, write out a new utra file.
-        let should_write = if let Ok(mut existing_file) = std::fs::File::open(generated_filename) {
-            let mut existing_file_contents = vec![];
-            existing_file.read_to_end(&mut existing_file_contents).expect("couldn't read existing utra generated file");
-            existing_file_contents != dest_vec
-        } else {
-            true
-        };
-        if should_write {
-            let mut dest_file =
-                std::fs::File::create(generated_filename).expect("couldn't open dest file");
-            dest_file
-                .write_all(&dest_vec)
-                .expect("couldn't write contents to utra file");
-        }
-
-        // ----- feedback SVD path to build framework -----
-        // pass the computed SVD filename back to the build system, so that we can pass this
-        // on to the image creation program. This is necessary so we can extract all the memory
-        // regions and create the whitelist of memory pages allowed to the kernel; any page not
-        // explicitly used by the hardware model is ineligible for mapping and allocation by any
-        // process. This helps to prevent memory aliasing attacks by hardware blocks that partially
-        // decode their addresses (this would be in anticipation of potential hardware bugs; ideally
-        // this isn't ever a problem).
-        let svd_path = out_dir().join("../../SVD_PATH");
-        let mut svd_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(svd_path)
-            .unwrap();
-        write!(svd_file, "utralib/{}", svd_filename).unwrap();
-    }
-    #[cfg(feature = "hosted")]
-    {
-        let svd_path = out_dir().join("../../SVD_PATH");
-        let mut svd_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(svd_path)
-            .unwrap();
-        write!(svd_file, "").unwrap(); // there is no SVD file for hosted mode
-    }
 }
 ========== build.rs from valuable-0.1.0 ============================================================
 #![warn(rust_2018_idioms, single_use_lifetimes)]
@@ -5875,7 +6411,29 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", Path::new(&dir).join("lib").display());
     }
 }
+========== build.rs from windows_aarch64_gnullvm-0.48.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "aarch64-pc-windows-gnullvm" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
 ========== build.rs from windows_aarch64_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "aarch64-pc-windows-msvc" && target != "aarch64-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_aarch64_msvc-0.48.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "aarch64-pc-windows-msvc" && target != "aarch64-uwp-windows-msvc" {
@@ -5897,7 +6455,29 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
+========== build.rs from windows_i686_gnu-0.48.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "i686-pc-windows-gnu" && target != "i686-uwp-windows-gnu" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
 ========== build.rs from windows_i686_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "i686-pc-windows-msvc" && target != "i686-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_i686_msvc-0.48.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "i686-pc-windows-msvc" && target != "i686-uwp-windows-msvc" {
@@ -5919,7 +6499,40 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
+========== build.rs from windows_x86_64_gnu-0.48.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-gnu" && target != "x86_64-uwp-windows-gnu" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_x86_64_gnullvm-0.48.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-gnullvm" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
 ========== build.rs from windows_x86_64_msvc-0.36.1 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-msvc" && target != "x86_64-uwp-windows-msvc" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_x86_64_msvc-0.48.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-msvc" && target != "x86_64-uwp-windows-msvc" {
@@ -5986,29 +6599,8 @@ fn main() {
         println!("cargo:rustc-link-lib=c");
     }
 }
-========== build.rs from xous-0.9.42 ============================================================
-// NOTE: Adapted from cortex-m/build.rs
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-
+========== build.rs from xous-0.9.50 ============================================================
 fn main() {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let target = env::var("TARGET").unwrap();
-    let name = env::var("CARGO_PKG_NAME").unwrap();
-
-    if target.starts_with("riscv") || target.starts_with("arm") {
-        fs::copy(
-            format!("bin/{}.a", target),
-            out_dir.join(format!("lib{}.a", name)),
-        )
-        .expect("couldn't find asm support library for target platform");
-
-        println!("cargo:rustc-link-lib=static={}", name);
-        println!("cargo:rustc-link-search={}", out_dir.display());
-        println!("cargo:rerun-if-changed=bin/{}.a", target);
-    }
-
     println!("cargo:rerun-if-changed=build.rs");
 }
 ========== build.rs from xous-riscv-0.5.6 ============================================================
