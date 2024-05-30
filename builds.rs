@@ -1,10 +1,8 @@
-========== build.rs from anyhow-1.0.58 ============================================================
-#![allow(clippy::option_if_let_else)]
-
+========== build.rs from anyhow-1.0.79 ============================================================
 use std::env;
-use std::fs;
+use std::ffi::OsString;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{self, Command, Stdio};
 use std::str;
 
 #[cfg(all(feature = "backtrace", not(feature = "std")))]
@@ -12,42 +10,53 @@ compile_error! {
     "`backtrace` feature without `std` feature is not supported"
 }
 
-// This code exercises the surface area that we expect of the std Backtrace
-// type. If the current toolchain is able to compile it, we go ahead and use
-// backtrace in anyhow.
-const PROBE: &str = r#"
-    #![feature(backtrace)]
-    #![allow(dead_code)]
-
-    use std::backtrace::{Backtrace, BacktraceStatus};
-    use std::error::Error;
-    use std::fmt::{self, Display};
-
-    #[derive(Debug)]
-    struct E;
-
-    impl Display for E {
-        fn fmt(&self, _formatter: &mut fmt::Formatter) -> fmt::Result {
-            unimplemented!()
-        }
-    }
-
-    impl Error for E {
-        fn backtrace(&self) -> Option<&Backtrace> {
-            let backtrace = Backtrace::capture();
-            match backtrace.status() {
-                BacktraceStatus::Captured | BacktraceStatus::Disabled | _ => {}
-            }
-            unimplemented!()
-        }
-    }
-"#;
-
 fn main() {
+    let mut error_generic_member_access = false;
     if cfg!(feature = "std") {
-        match compile_probe() {
-            Some(status) if status.success() => println!("cargo:rustc-cfg=backtrace"),
-            _ => {}
+        println!("cargo:rerun-if-changed=build/probe.rs");
+
+        let consider_rustc_bootstrap;
+        if compile_probe(false) {
+            // This is a nightly or dev compiler, so it supports unstable
+            // features regardless of RUSTC_BOOTSTRAP. No need to rerun build
+            // script if RUSTC_BOOTSTRAP is changed.
+            error_generic_member_access = true;
+            consider_rustc_bootstrap = false;
+        } else if let Some(rustc_bootstrap) = env::var_os("RUSTC_BOOTSTRAP") {
+            if compile_probe(true) {
+                // This is a stable or beta compiler for which the user has set
+                // RUSTC_BOOTSTRAP to turn on unstable features. Rerun build
+                // script if they change it.
+                error_generic_member_access = true;
+                consider_rustc_bootstrap = true;
+            } else if rustc_bootstrap == "1" {
+                // This compiler does not support the generic member access API
+                // in the form that anyhow expects. No need to pay attention to
+                // RUSTC_BOOTSTRAP.
+                error_generic_member_access = false;
+                consider_rustc_bootstrap = false;
+            } else {
+                // This is a stable or beta compiler for which RUSTC_BOOTSTRAP
+                // is set to restrict the use of unstable features by this
+                // crate.
+                error_generic_member_access = false;
+                consider_rustc_bootstrap = true;
+            }
+        } else {
+            // Without RUSTC_BOOTSTRAP, this compiler does not support the
+            // generic member access API in the form that anyhow expects, but
+            // try again if the user turns on unstable features.
+            error_generic_member_access = false;
+            consider_rustc_bootstrap = true;
+        }
+
+        if error_generic_member_access {
+            println!("cargo:rustc-cfg=std_backtrace");
+            println!("cargo:rustc-cfg=error_generic_member_access");
+        }
+
+        if consider_rustc_bootstrap {
+            println!("cargo:rerun-if-env-changed=RUSTC_BOOTSTRAP");
         }
     }
 
@@ -57,22 +66,46 @@ fn main() {
     };
 
     if rustc < 51 {
+        // core::ptr::addr_of
+        // https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#stabilized-apis
         println!("cargo:rustc-cfg=anyhow_no_ptr_addr_of");
     }
 
     if rustc < 52 {
+        // core::fmt::Arguments::as_str
+        // https://blog.rust-lang.org/2021/05/06/Rust-1.52.0.html#stabilized-apis
         println!("cargo:rustc-cfg=anyhow_no_fmt_arguments_as_str");
+
+        // #![deny(unsafe_op_in_unsafe_fn)]
+        // https://github.com/rust-lang/rust/issues/71668
+        println!("cargo:rustc-cfg=anyhow_no_unsafe_op_in_unsafe_fn_lint");
+    }
+
+    if !error_generic_member_access && cfg!(feature = "std") && rustc >= 65 {
+        // std::backtrace::Backtrace
+        // https://blog.rust-lang.org/2022/11/03/Rust-1.65.0.html#stabilized-apis
+        println!("cargo:rustc-cfg=std_backtrace");
     }
 }
 
-fn compile_probe() -> Option<ExitStatus> {
-    let rustc = env::var_os("RUSTC")?;
-    let out_dir = env::var_os("OUT_DIR")?;
-    let probefile = Path::new(&out_dir).join("probe.rs");
-    fs::write(&probefile, PROBE).ok()?;
+fn compile_probe(rustc_bootstrap: bool) -> bool {
+    if env::var_os("RUSTC_STAGE").is_some() {
+        // We are running inside rustc bootstrap. This is a highly non-standard
+        // environment with issues such as:
+        //
+        //     https://github.com/rust-lang/cargo/issues/11138
+        //     https://github.com/rust-lang/rust/issues/114839
+        //
+        // Let's just not use nightly features here.
+        return false;
+    }
+
+    let rustc = cargo_env_var("RUSTC");
+    let out_dir = cargo_env_var("OUT_DIR");
+    let probefile = Path::new("build").join("probe.rs");
 
     // Make sure to pick up Cargo rustc configuration.
-    let mut cmd = if let Some(wrapper) = env::var_os("CARGO_RUSTC_WRAPPER") {
+    let mut cmd = if let Some(wrapper) = env::var_os("RUSTC_WRAPPER") {
         let mut cmd = Command::new(wrapper);
         // The wrapper's first argument is supposed to be the path to rustc.
         cmd.arg(rustc);
@@ -81,14 +114,22 @@ fn compile_probe() -> Option<ExitStatus> {
         Command::new(rustc)
     };
 
+    if !rustc_bootstrap {
+        cmd.env_remove("RUSTC_BOOTSTRAP");
+    }
+
     cmd.stderr(Stdio::null())
         .arg("--edition=2018")
-        .arg("--crate-name=anyhow_build")
+        .arg("--crate-name=anyhow")
         .arg("--crate-type=lib")
-        .arg("--emit=metadata")
+        .arg("--emit=dep-info,metadata")
         .arg("--out-dir")
         .arg(out_dir)
         .arg(probefile);
+
+    if let Some(target) = env::var_os("TARGET") {
+        cmd.arg("--target").arg(target);
+    }
 
     // If Cargo wants to set RUSTFLAGS, use that.
     if let Ok(rustflags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
@@ -99,11 +140,14 @@ fn compile_probe() -> Option<ExitStatus> {
         }
     }
 
-    cmd.status().ok()
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
 }
 
 fn rustc_minor_version() -> Option<u32> {
-    let rustc = env::var_os("RUSTC")?;
+    let rustc = cargo_env_var("RUSTC");
     let output = Command::new(rustc).arg("--version").output().ok()?;
     let version = str::from_utf8(&output.stdout).ok()?;
     let mut pieces = version.split('.');
@@ -112,26 +156,33 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from atomic-polyfill-0.1.8 ============================================================
+
+fn cargo_env_var(key: &str) -> OsString {
+    env::var_os(key).unwrap_or_else(|| {
+        eprintln!(
+            "Environment variable ${} is not set during execution of build script",
+            key,
+        );
+        process::exit(1);
+    })
+}
+========== build.rs from atomic-polyfill-1.0.3 ============================================================
 use std::env;
 use std::fmt;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PolyfillLevel {
     // Native, ie no polyfill. Just reexport from core::sync::atomic
     Native,
-    // CAS polyfill: use AtomicXX from core::sync::atomic, add CAS polyfills with critical sections
-    Cas,
     // Full polyfill: polyfill both load/store and CAS with critical sections
-    Full,
+    Polyfill,
 }
 
 impl fmt::Display for PolyfillLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match *self {
             Self::Native => "native",
-            Self::Cas => "cas",
-            Self::Full => "full",
+            Self::Polyfill => "polyfill",
         };
         write!(f, "{}", s)
     }
@@ -143,48 +194,50 @@ fn main() {
     use PolyfillLevel::*;
 
     let patterns = [
-        ("riscv32imac-*", (Native, Full)),
-        ("riscv32gc-*", (Native, Full)),
+        ("avr-*", (Polyfill, Polyfill)),
+        ("msp430-none-elf", (Polyfill, Polyfill)),
+        ("riscv32imac-*", (Native, Polyfill)),
+        ("riscv32gc-*", (Native, Polyfill)),
         ("riscv32imc-*-espidf", (Native, Native)),
-        ("riscv32*", (Full, Full)),
-        ("avr-*", (Full, Full)),
-        ("thumbv4t-*", (Full, Full)),
-        ("thumbv6m-*", (Cas, Full)),
-        ("thumbv7m-*", (Native, Full)),
-        ("thumbv7em-*", (Native, Full)),
-        ("thumbv8m.base-*", (Native, Full)),
-        ("thumbv8m.main-*", (Native, Full)),
+        ("riscv32*", (Polyfill, Polyfill)),
+        ("thumbv4t-*", (Polyfill, Polyfill)),
+        ("thumbv6m-*", (Polyfill, Polyfill)),
+        ("thumbv7m-*", (Native, Polyfill)),
+        ("thumbv7em-*", (Native, Polyfill)),
+        ("thumbv8m.base-*", (Native, Polyfill)),
+        ("thumbv8m.main-*", (Native, Polyfill)),
         ("xtensa-*-espidf", (Native, Native)),
-        ("xtensa-esp32-*", (Native, Full)),
-        ("xtensa-esp32s2-*", (Full, Full)),
-        ("xtensa-esp32s3-*", (Native, Full)),
-        ("xtensa-esp8266-*", (Cas, Full)),
+        ("xtensa-esp32-*", (Native, Polyfill)),
+        ("xtensa-esp32s2-*", (Polyfill, Polyfill)),
+        ("xtensa-esp32s3-*", (Native, Polyfill)),
+        ("xtensa-esp8266-*", (Polyfill, Polyfill)),
     ];
 
     if let Some((_, (level, level64))) = patterns
         .iter()
         .find(|(pattern, _)| matches(pattern, &target))
     {
-        println!("cargo:rustc-cfg=u8_{}", level);
-        println!("cargo:rustc-cfg=u16_{}", level);
-        println!("cargo:rustc-cfg=u32_{}", level);
-        println!("cargo:rustc-cfg=u64_{}", level64);
-        println!("cargo:rustc-cfg=usize_{}", level);
-        println!("cargo:rustc-cfg=i8_{}", level);
-        println!("cargo:rustc-cfg=i16_{}", level);
-        println!("cargo:rustc-cfg=i32_{}", level);
-        println!("cargo:rustc-cfg=i64_{}", level64);
-        println!("cargo:rustc-cfg=isize_{}", level);
-        println!("cargo:rustc-cfg=ptr_{}", level);
-        println!("cargo:rustc-cfg=bool_{}", level);
+        if *level == PolyfillLevel::Polyfill {
+            println!("cargo:rustc-cfg=polyfill_u8");
+            println!("cargo:rustc-cfg=polyfill_u16");
+            println!("cargo:rustc-cfg=polyfill_u32");
+            println!("cargo:rustc-cfg=polyfill_usize");
+            println!("cargo:rustc-cfg=polyfill_i8");
+            println!("cargo:rustc-cfg=polyfill_i16");
+            println!("cargo:rustc-cfg=polyfill_i32");
+            println!("cargo:rustc-cfg=polyfill_isize");
+            println!("cargo:rustc-cfg=polyfill_ptr");
+            println!("cargo:rustc-cfg=polyfill_bool");
+        }
+
+        if *level64 == PolyfillLevel::Polyfill {
+            println!("cargo:rustc-cfg=polyfill_u64");
+            println!("cargo:rustc-cfg=polyfill_i64");
+        }
     } else {
         // If we don't know about the target, just reexport the entire `core::atomic::*`
         // This doesn't polyfill anything, but it's guaranteed to never fail build.
         println!("cargo:rustc-cfg=reexport_core");
-    }
-
-    if target.starts_with("avr-") {
-        println!("cargo:rustc-cfg=missing_refunwindsafe")
     }
 }
 
@@ -347,17 +400,8 @@ fn main() {
     println!("cargo:root={}", dst.display());
     println!("cargo:include={}", dst.join("include").display());
 }
-========== build.rs from cast-0.2.7 ============================================================
-extern crate rustc_version;
-
-fn main() {
-    let vers = rustc_version::version().unwrap();
-    if vers.major == 1 && vers.minor >= 26 {
-        println!("cargo:rustc-cfg=stable_i128")
-    }
-}
-========== build.rs from compiler_builtins-0.1.73 ============================================================
-use std::env;
+========== build.rs from compiler_builtins-0.1.108 ============================================================
+use std::{collections::BTreeMap, env, sync::atomic::Ordering};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -388,6 +432,8 @@ fn main() {
         || (target.contains("sgx") && target.contains("fortanix"))
         || target.contains("-none")
         || target.contains("nvptx")
+        || target.contains("uefi")
+        || target.contains("xous")
     {
         println!("cargo:rustc-cfg=feature=\"mem\"");
     }
@@ -413,13 +459,8 @@ fn main() {
     if !cfg!(feature = "mangled-names") && cfg!(feature = "c") {
         // Don't use a C compiler for these targets:
         //
-        // * wasm - clang for wasm is somewhat hard to come by and it's
-        //   unlikely that the C is really that much better than our own Rust.
         // * nvptx - everything is bitcode, not compatible with mixed C/Rust
-        // * riscv - the rust-lang/rust distribution container doesn't have a C
-        //   compiler nor is cc-rs ready for compilation to riscv (at this
-        //   time). This can probably be removed in the future
-        if !target.contains("wasm") && !target.contains("nvptx") && !target.starts_with("riscv") {
+        if !target.contains("nvptx") {
             #[cfg(feature = "c")]
             c::compile(&llvm_target, &target);
         }
@@ -446,6 +487,65 @@ fn main() {
     {
         println!("cargo:rustc-cfg=kernel_user_helpers")
     }
+
+    if llvm_target[0].starts_with("aarch64") {
+        generate_aarch64_outlined_atomics();
+    }
+}
+
+fn aarch64_symbol(ordering: Ordering) -> &'static str {
+    match ordering {
+        Ordering::Relaxed => "relax",
+        Ordering::Acquire => "acq",
+        Ordering::Release => "rel",
+        Ordering::AcqRel => "acq_rel",
+        _ => panic!("unknown symbol for {:?}", ordering),
+    }
+}
+
+/// The `concat_idents` macro is extremely annoying and doesn't allow us to define new items.
+/// Define them from the build script instead.
+/// Note that the majority of the code is still defined in `aarch64.rs` through inline macros.
+fn generate_aarch64_outlined_atomics() {
+    use std::fmt::Write;
+    // #[macro_export] so that we can use this in tests
+    let gen_macro =
+        |name| format!("#[macro_export] macro_rules! foreach_{name} {{ ($macro:path) => {{\n");
+
+    // Generate different macros for add/clr/eor/set so that we can test them separately.
+    let sym_names = ["cas", "ldadd", "ldclr", "ldeor", "ldset", "swp"];
+    let mut macros = BTreeMap::new();
+    for sym in sym_names {
+        macros.insert(sym, gen_macro(sym));
+    }
+
+    // Only CAS supports 16 bytes, and it has a different implementation that uses a different macro.
+    let mut cas16 = gen_macro("cas16");
+
+    for ordering in [
+        Ordering::Relaxed,
+        Ordering::Acquire,
+        Ordering::Release,
+        Ordering::AcqRel,
+    ] {
+        let sym_ordering = aarch64_symbol(ordering);
+        for size in [1, 2, 4, 8] {
+            for (sym, macro_) in &mut macros {
+                let name = format!("__aarch64_{sym}{size}_{sym_ordering}");
+                writeln!(macro_, "$macro!( {ordering:?}, {size}, {name} );").unwrap();
+            }
+        }
+        let name = format!("__aarch64_cas16_{sym_ordering}");
+        writeln!(cas16, "$macro!( {ordering:?}, {name} );").unwrap();
+    }
+
+    let mut buf = String::new();
+    for macro_def in macros.values().chain(std::iter::once(&cas16)) {
+        buf += macro_def;
+        buf += "}; }\n";
+    }
+    let dst = std::env::var("OUT_DIR").unwrap() + "/outlined_atomics.rs";
+    std::fs::write(dst, buf).unwrap();
 }
 
 #[cfg(feature = "c")]
@@ -454,7 +554,7 @@ mod c {
 
     use std::collections::{BTreeMap, HashSet};
     use std::env;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use std::path::{Path, PathBuf};
 
@@ -546,6 +646,21 @@ mod c {
             cfg.define("VISIBILITY_HIDDEN", None);
         }
 
+        // int_util.c tries to include stdlib.h if `_WIN32` is defined,
+        // which it is when compiling UEFI targets with clang. This is
+        // at odds with compiling with `-ffreestanding`, as the header
+        // may be incompatible or not present. Create a minimal stub
+        // header to use instead.
+        if target_os == "uefi" {
+            let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+            let include_dir = out_dir.join("include");
+            if !include_dir.exists() {
+                fs::create_dir(&include_dir).unwrap();
+            }
+            fs::write(include_dir.join("stdlib.h"), "#include <stddef.h>").unwrap();
+            cfg.flag(&format!("-I{}", include_dir.to_str().unwrap()));
+        }
+
         let mut sources = Sources::new();
         sources.extend(&[
             ("__absvdi2", "absvdi2.c"),
@@ -576,14 +691,11 @@ mod c {
             sources.extend(&[
                 ("__divdc3", "divdc3.c"),
                 ("__divsc3", "divsc3.c"),
-                ("__divxc3", "divxc3.c"),
                 ("__extendhfsf2", "extendhfsf2.c"),
                 ("__muldc3", "muldc3.c"),
                 ("__mulsc3", "mulsc3.c"),
-                ("__mulxc3", "mulxc3.c"),
                 ("__negdf2", "negdf2.c"),
                 ("__negsf2", "negsf2.c"),
-                ("__powixf2", "powixf2.c"),
                 ("__truncdfhf2", "truncdfhf2.c"),
                 ("__truncsfhf2", "truncsfhf2.c"),
             ]);
@@ -601,6 +713,7 @@ mod c {
         // include them.
         if target_os != "ios"
             && target_os != "watchos"
+            && target_os != "tvos"
             && (target_vendor != "apple" || target_arch != "x86")
         {
             sources.extend(&[
@@ -637,29 +750,12 @@ mod c {
             ]);
         }
 
-        if target_env == "msvc" {
-            if target_arch == "x86_64" {
-                sources.extend(&[("__floatdixf", "x86_64/floatdixf.c")]);
-            }
-        } else {
-            // None of these seem to be used on x86_64 windows, and they've all
-            // got the wrong ABI anyway, so we want to avoid them.
-            if target_os != "windows" {
-                if target_arch == "x86_64" {
-                    sources.extend(&[
-                        ("__floatdixf", "x86_64/floatdixf.c"),
-                        ("__floatundixf", "x86_64/floatundixf.S"),
-                    ]);
-                }
-            }
-
+        if target_env != "msvc" {
             if target_arch == "x86" {
                 sources.extend(&[
                     ("__ashldi3", "i386/ashldi3.S"),
                     ("__ashrdi3", "i386/ashrdi3.S"),
                     ("__divdi3", "i386/divdi3.S"),
-                    ("__floatdixf", "i386/floatdixf.S"),
-                    ("__floatundixf", "i386/floatundixf.S"),
                     ("__lshrdi3", "i386/lshrdi3.S"),
                     ("__moddi3", "i386/moddi3.S"),
                     ("__muldi3", "i386/muldi3.S"),
@@ -672,6 +768,7 @@ mod c {
         if target_arch == "arm"
             && target_os != "ios"
             && target_os != "watchos"
+            && target_os != "tvos"
             && target_env != "msvc"
         {
             sources.extend(&[
@@ -798,7 +895,7 @@ mod c {
             }
         }
 
-        if target_arch == "mips" {
+        if target_arch == "mips" || target_arch == "riscv32" || target_arch == "riscv64" {
             sources.extend(&[("__bswapsi2", "bswapsi2.c")]);
         }
 
@@ -816,11 +913,13 @@ mod c {
                 ("__fe_getround", "fp_mode.c"),
                 ("__divtf3", "divtf3.c"),
                 ("__trunctfdf2", "trunctfdf2.c"),
+                ("__trunctfsf2", "trunctfsf2.c"),
             ]);
         }
 
         // Remove the assembly implementations that won't compile for the target
-        if llvm_target[0] == "thumbv6m" || llvm_target[0] == "thumbv8m.base" {
+        if llvm_target[0] == "thumbv6m" || llvm_target[0] == "thumbv8m.base" || target_os == "uefi"
+        {
             let mut to_remove = Vec::new();
             for (k, v) in sources.map.iter() {
                 if v.ends_with(".S") {
@@ -845,6 +944,11 @@ mod c {
             // https://r.android.com/2038949 which will be released in a future
             // NDK version) by providing a definition of LONG_BIT.
             cfg.define("LONG_BIT", "(8 * sizeof(long))");
+        }
+
+        // OpenHarmony also uses emulated TLS.
+        if target_env == "ohos" {
+            sources.extend(&[("__emutls_get_address", "emutls.c")]);
         }
 
         // When compiling the C code we require the user to tell us where the
@@ -873,7 +977,12 @@ mod c {
             build_aarch64_out_of_line_atomics_libraries(&src_dir, cfg);
 
             // Some run-time CPU feature detection is necessary, as well.
-            sources.extend(&[("__aarch64_have_lse_atomics", "cpu_model.c")]);
+            let cpu_model_src = if src_dir.join("cpu_model.c").exists() {
+                "cpu_model.c"
+            } else {
+                "cpu_model/aarch64.c"
+            };
+            sources.extend(&[("__aarch64_have_lse_atomics", cpu_model_src)]);
         }
 
         let mut added_sources = HashSet::new();
@@ -934,61 +1043,6 @@ mod c {
                 }
             }
         }
-    }
-}
-========== build.rs from cortex-m-0.7.4 ============================================================
-use std::path::PathBuf;
-use std::{env, fs};
-
-fn main() {
-    let target = env::var("TARGET").unwrap();
-    let host_triple = env::var("HOST").unwrap();
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let name = env::var("CARGO_PKG_NAME").unwrap();
-
-    if host_triple == target {
-        println!("cargo:rustc-cfg=native");
-    }
-
-    if target.starts_with("thumb") {
-        let suffix = if env::var_os("CARGO_FEATURE_LINKER_PLUGIN_LTO").is_some() {
-            "-lto"
-        } else {
-            ""
-        };
-
-        fs::copy(
-            format!("bin/{}{}.a", target, suffix),
-            out_dir.join(format!("lib{}.a", name)),
-        )
-        .unwrap();
-
-        println!("cargo:rustc-link-lib=static={}", name);
-        println!("cargo:rustc-link-search={}", out_dir.display());
-    }
-
-    if target.starts_with("thumbv6m-") {
-        println!("cargo:rustc-cfg=cortex_m");
-        println!("cargo:rustc-cfg=armv6m");
-    } else if target.starts_with("thumbv7m-") {
-        println!("cargo:rustc-cfg=cortex_m");
-        println!("cargo:rustc-cfg=armv7m");
-    } else if target.starts_with("thumbv7em-") {
-        println!("cargo:rustc-cfg=cortex_m");
-        println!("cargo:rustc-cfg=armv7m");
-        println!("cargo:rustc-cfg=armv7em"); // (not currently used)
-    } else if target.starts_with("thumbv8m.base") {
-        println!("cargo:rustc-cfg=cortex_m");
-        println!("cargo:rustc-cfg=armv8m");
-        println!("cargo:rustc-cfg=armv8m_base");
-    } else if target.starts_with("thumbv8m.main") {
-        println!("cargo:rustc-cfg=cortex_m");
-        println!("cargo:rustc-cfg=armv8m");
-        println!("cargo:rustc-cfg=armv8m_main");
-    }
-
-    if target.ends_with("-eabihf") {
-        println!("cargo:rustc-cfg=has_fpu");
     }
 }
 ========== build.rs from crc-1.8.1 ============================================================
@@ -1082,126 +1136,9 @@ fn rustc_minor_version() -> Option<u32> {
     }
     otry!(pieces.next()).parse().ok()
 }
-========== build.rs from critical-section-0.2.7 ============================================================
-use std::env;
-
-fn main() {
-    let target = env::var("TARGET").unwrap();
-
-    if target.starts_with("thumbv") {
-        println!("cargo:rustc-cfg=cortex_m");
-    }
-}
-========== build.rs from crossbeam-epoch-0.9.8 ============================================================
+========== build.rs from crossbeam-utils-0.8.19 ============================================================
 // The rustc-cfg listed below are considered public API, but it is *unstable*
 // and outside of the normal semver guarantees:
-//
-// - `crossbeam_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms)]
-
-use std::env;
-
-include!("no_atomic.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    let cfg = match autocfg::AutoCfg::new() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to determine rustc version: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=crossbeam_no_atomic_cas");
-    }
-
-    if cfg.probe_rustc_version(1, 61) {
-        // TODO: invert cfg once Rust 1.61 became stable.
-        println!("cargo:rustc-cfg=crossbeam_const_fn_trait_bound");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic.rs");
-}
-========== build.rs from crossbeam-queue-0.3.5 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `crossbeam_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms)]
-
-use std::env;
-
-include!("no_atomic.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=crossbeam_no_atomic_cas");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic.rs");
-}
-========== build.rs from crossbeam-utils-0.8.8 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `crossbeam_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
 //
 // - `crossbeam_no_atomic`
 //      Assume the target does *not* support any atomic operations.
@@ -1209,12 +1146,6 @@ fn main() {
 //      need to enable it manually when building for custom targets or using
 //      non-cargo build systems that don't run the build script.
 //
-// - `crossbeam_no_atomic_64`
-//      Assume the target does *not* support AtomicU64/AtomicI64.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
 // With the exceptions mentioned above, the rustc-cfg emitted by the build
 // script are *not* public API.
 
@@ -1223,10 +1154,13 @@ fn main() {
 use std::env;
 
 include!("no_atomic.rs");
+include!("build-common.rs");
 
 fn main() {
+    println!("cargo:rerun-if-changed=no_atomic.rs");
+
     let target = match env::var("TARGET") {
-        Ok(target) => target,
+        Ok(target) => convert_custom_linux_target(target),
         Err(e) => {
             println!(
                 "cargo:warning={}: unable to get TARGET environment variable: {}",
@@ -1237,23 +1171,18 @@ fn main() {
         }
     };
 
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=crossbeam_no_atomic_cas");
-    }
+    // Note that this is `no_`*, not `has_*`. This allows treating as the latest
+    // stable rustc is used when the build script doesn't run. This is useful
+    // for non-cargo build systems that don't run the build script.
     if NO_ATOMIC.contains(&&*target) {
         println!("cargo:rustc-cfg=crossbeam_no_atomic");
-        println!("cargo:rustc-cfg=crossbeam_no_atomic_64");
-    } else if NO_ATOMIC_64.contains(&&*target) {
-        println!("cargo:rustc-cfg=crossbeam_no_atomic_64");
-    } else {
-        // Otherwise, assuming `"max-atomic-width" == 64` or `"max-atomic-width" == 128`.
     }
 
-    println!("cargo:rerun-if-changed=no_atomic.rs");
+    // `cfg(sanitize = "..")` is not stabilized.
+    let sanitize = env::var("CARGO_CFG_SANITIZE").unwrap_or_default();
+    if sanitize.contains("thread") {
+        println!("cargo:rustc-cfg=crossbeam_sanitize_thread");
+    }
 }
 ========== build.rs from crunchy-0.2.2 ============================================================
 use std::env;
@@ -1509,7 +1438,7 @@ mod tests {{
 
     f.write_all(output.as_bytes()).unwrap();
 }
-========== build.rs from defmt-0.3.5 ============================================================
+========== build.rs from defmt-0.3.6 ============================================================
 use std::{env, error::Error, fs, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -1535,16 +1464,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-========== build.rs from defmt-macros-0.3.6 ============================================================
+========== build.rs from defmt-macros-0.3.7 ============================================================
 fn main() {
     println!("cargo:rerun-if-env-changed=DEFMT_LOG");
 }
-========== build.rs from errno-dragonfly-0.1.2 ============================================================
-fn main() {
-    cc::Build::new().file("src/errno.c").compile("liberrno.a");
-}
-========== build.rs from eyre-0.6.8 ============================================================
+========== build.rs from eyre-0.6.12 ============================================================
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
@@ -1601,16 +1527,18 @@ fn main() {
         _ => {}
     }
 
-    let rustc = match rustc_minor_version() {
-        Some(rustc) => rustc,
+    let version = match rustc_version_info() {
+        Some(version) => version,
         None => return,
     };
 
-    if rustc < 52 {
+    version.toolchain.set_feature();
+
+    if version.minor < 52 {
         println!("cargo:rustc-cfg=eyre_no_fmt_arguments_as_str");
     }
 
-    if rustc < 58 {
+    if version.minor < 58 {
         println!("cargo:rustc-cfg=eyre_no_fmt_args_capture");
     }
 }
@@ -1632,185 +1560,48 @@ fn compile_probe(probe: &str) -> Option<ExitStatus> {
         .ok()
 }
 
-fn rustc_minor_version() -> Option<u32> {
-    let rustc = env::var_os("RUSTC")?;
+// TODO factor this toolchain parsing and related tests into its own file
+#[derive(PartialEq)]
+enum Toolchain {
+    Stable,
+    Beta,
+    Nightly,
+}
+impl Toolchain {
+    fn set_feature(self) {
+        match self {
+            Toolchain::Nightly => println!("cargo:rustc-cfg=nightly"),
+            Toolchain::Beta => println!("cargo:rustc-cfg=beta"),
+            Toolchain::Stable => println!("cargo:rustc-cfg=stable"),
+        }
+    }
+}
+
+struct VersionInfo {
+    minor: u32,
+    toolchain: Toolchain,
+}
+
+fn rustc_version_info() -> Option<VersionInfo> {
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
     let output = Command::new(rustc).arg("--version").output().ok()?;
     let version = str::from_utf8(&output.stdout).ok()?;
-    let mut pieces = version.split('.');
-    if pieces.next() != Some("rustc 1") {
+    let mut pieces = version.split(['.', ' ', '-']);
+    if pieces.next() != Some("rustc") {
         return None;
     }
-    pieces.next()?.parse().ok()
-}
-========== build.rs from futures-channel-0.3.21 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `futures_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms, single_use_lifetimes)]
-
-use std::env;
-
-include!("no_atomic_cas.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
+    let _major: u32 = pieces.next()?.parse().ok()?;
+    let minor = pieces.next()?.parse().ok()?;
+    let _patch: u32 = pieces.next()?.parse().ok()?;
+    let toolchain = match pieces.next() {
+        Some("beta") => Toolchain::Beta,
+        Some("nightly") => Toolchain::Nightly,
+        _ => Toolchain::Stable,
     };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=futures_no_atomic_cas");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic_cas.rs");
+    let version = VersionInfo { minor, toolchain };
+    Some(version)
 }
-========== build.rs from futures-core-0.3.21 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `futures_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms, single_use_lifetimes)]
-
-use std::env;
-
-include!("no_atomic_cas.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=futures_no_atomic_cas");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic_cas.rs");
-}
-========== build.rs from futures-task-0.3.21 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `futures_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms, single_use_lifetimes)]
-
-use std::env;
-
-include!("no_atomic_cas.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=futures_no_atomic_cas");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic_cas.rs");
-}
-========== build.rs from futures-util-0.3.21 ============================================================
-// The rustc-cfg listed below are considered public API, but it is *unstable*
-// and outside of the normal semver guarantees:
-//
-// - `futures_no_atomic_cas`
-//      Assume the target does *not* support atomic CAS operations.
-//      This is usually detected automatically by the build script, but you may
-//      need to enable it manually when building for custom targets or using
-//      non-cargo build systems that don't run the build script.
-//
-// With the exceptions mentioned above, the rustc-cfg emitted by the build
-// script are *not* public API.
-
-#![warn(rust_2018_idioms, single_use_lifetimes)]
-
-use std::env;
-
-include!("no_atomic_cas.rs");
-
-fn main() {
-    let target = match env::var("TARGET") {
-        Ok(target) => target,
-        Err(e) => {
-            println!(
-                "cargo:warning={}: unable to get TARGET environment variable: {}",
-                env!("CARGO_PKG_NAME"),
-                e
-            );
-            return;
-        }
-    };
-
-    // Note that this is `no_*`, not `has_*`. This allows treating
-    // `cfg(target_has_atomic = "ptr")` as true when the build script doesn't
-    // run. This is needed for compatibility with non-cargo build systems that
-    // don't run the build script.
-    if NO_ATOMIC_CAS.contains(&&*target) {
-        println!("cargo:rustc-cfg=futures_no_atomic_cas");
-    }
-
-    println!("cargo:rerun-if-changed=no_atomic_cas.rs");
-}
-========== build.rs from generic-array-0.14.5 ============================================================
+========== build.rs from generic-array-0.14.7 ============================================================
 fn main() {
     if version_check::is_min_version("1.41.0").unwrap_or(false) {
         println!("cargo:rustc-cfg=relaxed_coherence");
@@ -1836,7 +1627,7 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Security");
     }
 }
-========== build.rs from heapless-0.7.16 ============================================================
+========== build.rs from heapless-0.7.17 ============================================================
 #![deny(warnings)]
 
 use std::{env, error::Error};
@@ -1879,6 +1670,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // | "riscv32imc-unknown-none-elf"  // supported by atomic-polyfill
                 | "thumbv4t-none-eabi"
                 // | "thumbv6m-none-eabi"           // supported by atomic-polyfill
+                // | "xtensa-esp32s2-none-elf"      // supported by atomic-polyfill
                 => {}
 
             _ => {
@@ -1894,6 +1686,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "msp430-none-elf"
         // | "riscv32i-unknown-none-elf"    // supported by atomic-polyfill
         // | "riscv32imc-unknown-none-elf"  // supported by atomic-polyfill
+        // | "xtensa-esp32s2-none-elf"  // supported by atomic-polyfill
         => {}
 
         _ => {
@@ -1914,7 +1707,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("cargo:rustc-cfg=cas_atomic_polyfill");
             }
 
-            "thumbv6m-none-eabi" => {
+            "thumbv6m-none-eabi" | "xtensa-esp32s2-none-elf" => {
                 println!("cargo:rustc-cfg=cas_atomic_polyfill");
             }
             _ => {}
@@ -2023,7 +1816,7 @@ fn compile_probe(source: &str) -> Option<ExitStatus> {
 
     cmd.status().ok()
 }
-========== build.rs from hidapi-1.4.1 ============================================================
+========== build.rs from hidapi-1.5.0 ============================================================
 // **************************************************************************
 // Copyright (c) 2015 Roland Ruckerbauer All Rights Reserved.
 //
@@ -2190,7 +1983,7 @@ fn compile_illumos() {
 }
 
 fn compile_windows() {
-    let linkage = env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or(String::new());
+    let linkage = env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
 
     let mut cc = cc::Build::new();
     cc.file("etc/hidapi/windows/hid.c")
@@ -2213,7 +2006,7 @@ fn compile_macos() {
     println!("cargo:rustc-link-lib=framework=CoreFoundation");
     println!("cargo:rustc-link-lib=framework=AppKit")
 }
-========== build.rs from httparse-1.7.1 ============================================================
+========== build.rs from httparse-1.8.0 ============================================================
 use std::env;
 //use std::ffi::OsString;
 //use std::process::Command;
@@ -2379,7 +2172,30 @@ fn var_is(key: &str, val: &str) -> bool {
         Err(_) => false,
     }
 }
-========== build.rs from indexmap-1.9.1 ============================================================
+========== build.rs from iana-time-zone-haiku-0.1.2 ============================================================
+use std::env;
+
+fn main() {
+    cc::Build::new()
+        .warnings(false)
+        .cpp(true)
+        .file("src/implementation.cc")
+        .flag_if_supported("-std=c++11")
+        .compile("tz_haiku");
+
+    println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src/implementation.cc");
+    println!("cargo:rerun-if-changed=src/interface.h");
+
+    let target = env::var_os("TARGET").expect("cargo should set TARGET env var");
+    let target = target
+        .to_str()
+        .expect("TARGET env var should be valid UTF-8");
+    if target.contains("haiku") {
+        println!("cargo:rustc-link-lib=be");
+    }
+}
+========== build.rs from indexmap-1.9.3 ============================================================
 fn main() {
     // If "std" is explicitly requested, don't bother probing the target for it.
     match std::env::var_os("CARGO_FEATURE_STD") {
@@ -2388,7 +2204,7 @@ fn main() {
     }
     autocfg::rerun_path("build.rs");
 }
-========== build.rs from libc-0.2.147 ============================================================
+========== build.rs from libc-0.2.153 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -2398,11 +2214,13 @@ use std::string::String;
 // need to know all the possible cfgs that this script will set. If you need to set another cfg
 // make sure to add it to this list as well.
 const ALLOWED_CFGS: &'static [&'static str] = &[
+    "emscripten_new_stat_abi",
     "freebsd10",
     "freebsd11",
     "freebsd12",
     "freebsd13",
     "freebsd14",
+    "freebsd15",
     "libc_align",
     "libc_cfg_target_vendor",
     "libc_const_extern_fn",
@@ -2423,9 +2241,12 @@ const ALLOWED_CFGS: &'static [&'static str] = &[
 
 // Extra values to allow for check-cfg.
 const CHECK_CFG_EXTRA: &'static [(&'static str, &'static [&'static str])] = &[
-    ("target_os", &["switch", "aix", "ohos"]),
+    ("target_os", &["switch", "aix", "ohos", "hurd"]),
     ("target_env", &["illumos", "wasi", "aix", "ohos"]),
-    ("target_arch", &["loongarch64"]),
+    (
+        "target_arch",
+        &["loongarch64", "mips32r6", "mips64r6", "csky"],
+    ),
 ];
 
 fn main() {
@@ -2446,18 +2267,25 @@ fn main() {
         );
     }
 
-    // The ABI of libc used by libstd is backward compatible with FreeBSD 10.
+    // The ABI of libc used by std is backward compatible with FreeBSD 12.
     // The ABI of libc from crates.io is backward compatible with FreeBSD 11.
     //
     // On CI, we detect the actual FreeBSD version and match its ABI exactly,
     // running tests to ensure that the ABI is correct.
     match which_freebsd() {
-        Some(10) if libc_ci || rustc_dep_of_std => set_cfg("freebsd10"),
+        Some(10) if libc_ci => set_cfg("freebsd10"),
         Some(11) if libc_ci => set_cfg("freebsd11"),
-        Some(12) if libc_ci => set_cfg("freebsd12"),
+        Some(12) if libc_ci || rustc_dep_of_std => set_cfg("freebsd12"),
         Some(13) if libc_ci => set_cfg("freebsd13"),
         Some(14) if libc_ci => set_cfg("freebsd14"),
+        Some(15) if libc_ci => set_cfg("freebsd15"),
         Some(_) | None => set_cfg("freebsd11"),
+    }
+
+    match emcc_version_code() {
+        Some(v) if (v >= 30142) => set_cfg("emscripten_new_stat_abi"),
+        // Non-Emscripten or version < 3.1.42.
+        Some(_) | None => (),
     }
 
     // On CI: deny all warnings
@@ -2548,11 +2376,19 @@ fn main() {
     // https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#check-cfg
     if libc_check_cfg {
         for cfg in ALLOWED_CFGS {
-            println!("cargo:rustc-check-cfg=values({})", cfg);
+            if rustc_minor_ver >= 75 {
+                println!("cargo:rustc-check-cfg=cfg({})", cfg);
+            } else {
+                println!("cargo:rustc-check-cfg=values({})", cfg);
+            }
         }
         for &(name, values) in CHECK_CFG_EXTRA {
             let values = values.join("\",\"");
-            println!("cargo:rustc-check-cfg=values({},\"{}\")", name, values);
+            if rustc_minor_ver >= 75 {
+                println!("cargo:rustc-check-cfg=cfg({},values(\"{}\"))", name, values);
+            } else {
+                println!("cargo:rustc-check-cfg=values({},\"{}\")", name, values);
+            }
         }
     }
 }
@@ -2625,8 +2461,39 @@ fn which_freebsd() -> Option<i32> {
         s if s.starts_with("12") => Some(12),
         s if s.starts_with("13") => Some(13),
         s if s.starts_with("14") => Some(14),
+        s if s.starts_with("15") => Some(15),
         _ => None,
     }
+}
+
+fn emcc_version_code() -> Option<u64> {
+    let output = std::process::Command::new("emcc")
+        .arg("-dumpversion")
+        .output()
+        .ok();
+    if output.is_none() {
+        return None;
+    }
+    let output = output.unwrap();
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok();
+    if stdout.is_none() {
+        return None;
+    }
+    let version = stdout.unwrap();
+
+    // Some Emscripten versions come with `-git` attached, so split the
+    // version string also on the `-` char.
+    let mut pieces = version.trim().split(|c| c == '.' || c == '-');
+
+    let major = pieces.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let minor = pieces.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let patch = pieces.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+
+    Some(major * 10000 + minor * 100 + patch)
 }
 
 fn set_cfg(cfg: &str) {
@@ -3080,149 +2947,13 @@ mod musl_reference_tests {
         drop(Command::new("rustfmt").arg(&path).status());
     }
 }
-========== build.rs from lock_api-0.4.7 ============================================================
+========== build.rs from lock_api-0.4.11 ============================================================
 fn main() {
     let cfg = autocfg::new();
 
     if cfg.probe_rustc_version(1, 61) {
         println!("cargo:rustc-cfg=has_const_fn_trait_bound");
     }
-}
-========== build.rs from log-0.4.17 ============================================================
-//! This build script detects target platforms that lack proper support for
-//! atomics and sets `cfg` flags accordingly.
-
-use std::env;
-use std::str;
-
-fn main() {
-    let target = match rustc_target() {
-        Some(target) => target,
-        None => return,
-    };
-
-    if target_has_atomic_cas(&target) {
-        println!("cargo:rustc-cfg=atomic_cas");
-    }
-
-    if target_has_atomics(&target) {
-        println!("cargo:rustc-cfg=has_atomics");
-    }
-
-    println!("cargo:rerun-if-changed=build.rs");
-}
-
-fn target_has_atomic_cas(target: &str) -> bool {
-    match &target[..] {
-        "thumbv6m-none-eabi"
-        | "msp430-none-elf"
-        | "riscv32i-unknown-none-elf"
-        | "riscv32imc-unknown-none-elf" => false,
-        _ => true,
-    }
-}
-
-fn target_has_atomics(target: &str) -> bool {
-    match &target[..] {
-        "thumbv4t-none-eabi"
-        | "msp430-none-elf"
-        | "riscv32i-unknown-none-elf"
-        | "riscv32imc-unknown-none-elf" => false,
-        _ => true,
-    }
-}
-
-fn rustc_target() -> Option<String> {
-    env::var("TARGET").ok()
-}
-========== build.rs from memchr-2.5.0 ============================================================
-use std::env;
-
-fn main() {
-    enable_simd_optimizations();
-    enable_libc();
-}
-
-// This adds various simd cfgs if this compiler and target support it.
-//
-// This can be disabled with RUSTFLAGS="--cfg memchr_disable_auto_simd", but
-// this is generally only intended for testing.
-//
-// On targets which don't feature SSE2, this is disabled, as LLVM wouln't know
-// how to work with SSE2 operands. Enabling SSE4.2 and AVX on SSE2-only targets
-// is not a problem. In that case, the fastest option will be chosen at
-// runtime.
-fn enable_simd_optimizations() {
-    if is_env_set("CARGO_CFG_MEMCHR_DISABLE_AUTO_SIMD") {
-        return;
-    }
-    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    match &arch[..] {
-        "x86_64" => {
-            if !target_has_feature("sse2") {
-                return;
-            }
-            println!("cargo:rustc-cfg=memchr_runtime_simd");
-            println!("cargo:rustc-cfg=memchr_runtime_sse2");
-            println!("cargo:rustc-cfg=memchr_runtime_sse42");
-            println!("cargo:rustc-cfg=memchr_runtime_avx");
-        }
-        "wasm32" | "wasm64" => {
-            if !target_has_feature("simd128") {
-                return;
-            }
-            println!("cargo:rustc-cfg=memchr_runtime_simd");
-            println!("cargo:rustc-cfg=memchr_runtime_wasm128");
-        }
-        _ => {}
-    }
-}
-
-// This adds a `memchr_libc` cfg if and only if libc can be used, if no other
-// better option is available.
-//
-// This could be performed in the source code, but it's simpler to do it once
-// here and consolidate it into one cfg knob.
-//
-// Basically, we use libc only if its enabled and if we aren't targeting a
-// known bad platform. For example, wasm32 doesn't have a libc and the
-// performance of memchr on Windows is seemingly worse than the fallback
-// implementation.
-fn enable_libc() {
-    const NO_ARCH: &'static [&'static str] = &["wasm32", "windows"];
-    const NO_ENV: &'static [&'static str] = &["sgx"];
-
-    if !is_feature_set("LIBC") {
-        return;
-    }
-
-    let arch = match env::var("CARGO_CFG_TARGET_ARCH") {
-        Err(_) => return,
-        Ok(arch) => arch,
-    };
-    let env = match env::var("CARGO_CFG_TARGET_ENV") {
-        Err(_) => return,
-        Ok(env) => env,
-    };
-    if NO_ARCH.contains(&&*arch) || NO_ENV.contains(&&*env) {
-        return;
-    }
-
-    println!("cargo:rustc-cfg=memchr_libc");
-}
-
-fn is_feature_set(name: &str) -> bool {
-    is_env_set(&format!("CARGO_FEATURE_{}", name))
-}
-
-fn is_env_set(name: &str) -> bool {
-    env::var_os(name).is_some()
-}
-
-fn target_has_feature(feature: &str) -> bool {
-    env::var("CARGO_CFG_TARGET_FEATURE")
-        .map(|features| features.contains(feature))
-        .unwrap_or(false)
 }
 ========== build.rs from memoffset-0.6.5 ============================================================
 extern crate autocfg;
@@ -3247,7 +2978,7 @@ fn main() {
         println!("cargo:rustc-cfg=raw_ref_macros");
     }
 }
-========== build.rs from minifb-0.23.0 ============================================================
+========== build.rs from minifb-0.26.0 ============================================================
 use std::env;
 extern crate cc;
 
@@ -3295,7 +3026,7 @@ fn main() {
     } else if !env.contains("windows") && !env.contains("wasm32") {
         // build scalar on non-windows and non-mac
         cc::Build::new()
-            .file("src/native/posix/scalar.cpp")
+            .file("src/native/posix/scalar.c")
             .opt_level(3) // always build with opts for scaler so it's fast in debug also
             .compile("libscalar.a")
     }
@@ -3307,7 +3038,7 @@ use autocfg;
 fn main() {
     autocfg::new().emit_sysroot_crate("alloc");
 }
-========== build.rs from num-bigint-0.4.3 ============================================================
+========== build.rs from num-bigint-0.4.4 ============================================================
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -3315,26 +3046,32 @@ use std::io::Write;
 use std::path::Path;
 
 fn main() {
-    let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH");
-    let u64_digit = pointer_width.as_ref().map(String::as_str) == Ok("64");
+    let ptr_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH");
+    let u64_digit = ptr_width
+        .as_ref()
+        .map(|x| x == "64" || x == "128")
+        .unwrap_or(false);
+
     if u64_digit {
         autocfg::emit("u64_digit");
     }
+
     let ac = autocfg::new();
     let std = if ac.probe_sysroot_crate("std") {
         "std"
     } else {
         "core"
     };
+
     if ac.probe_path(&format!("{}::convert::TryFrom", std)) {
         autocfg::emit("has_try_from");
     }
 
-    if let Ok(target_arch) = env::var("CARGO_CFG_TARGET_ARCH") {
-        if target_arch == "x86_64" || target_arch == "x86" {
+    if let Ok(arch) = env::var("CARGO_CFG_TARGET_ARCH") {
+        if arch == "x86_64" || arch == "x86" {
             let digit = if u64_digit { "u64" } else { "u32" };
 
-            let addcarry = format!("{}::arch::{}::_addcarry_{}", std, target_arch, digit);
+            let addcarry = format!("{}::arch::{}::_addcarry_{}", std, arch, digit);
             if ac.probe_path(&addcarry) {
                 autocfg::emit("use_addcarry");
             }
@@ -3396,40 +3133,6 @@ fn write_radix_bases() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-========== build.rs from num-integer-0.1.45 ============================================================
-extern crate autocfg;
-
-use std::env;
-
-fn main() {
-    // If the "i128" feature is explicity requested, don't bother probing for it.
-    // It will still cause a build error if that was set improperly.
-    if env::var_os("CARGO_FEATURE_I128").is_some() || autocfg::new().probe_type("i128") {
-        autocfg::emit("has_i128");
-    }
-
-    autocfg::rerun_path("build.rs");
-}
-========== build.rs from num-iter-0.1.43 ============================================================
-extern crate autocfg;
-
-use std::env;
-
-fn main() {
-    let autocfg = autocfg::new();
-
-    // If the "i128" feature is explicity requested, don't bother probing for it.
-    // It will still cause a build error if that was set improperly.
-    if env::var_os("CARGO_FEATURE_I128").is_some() || autocfg.probe_type("i128") {
-        autocfg::emit("has_i128");
-    }
-
-    // The RangeBounds trait was stabilized in 1.28, so from that version onwards we
-    // implement that trait.
-    autocfg.emit_rustc_version(1, 28);
-
-    autocfg::rerun_path("build.rs");
-}
 ========== build.rs from num-rational-0.3.2 ============================================================
 fn main() {
     let ac = autocfg::new();
@@ -3439,19 +3142,11 @@ fn main() {
 
     autocfg::rerun_path("build.rs");
 }
-========== build.rs from num-traits-0.2.15 ============================================================
-extern crate autocfg;
-
+========== build.rs from num-traits-0.2.18 ============================================================
 use std::env;
 
 fn main() {
     let ac = autocfg::new();
-
-    // If the "i128" feature is explicity requested, don't bother probing for it.
-    // It will still cause a build error if that was set improperly.
-    if env::var_os("CARGO_FEATURE_I128").is_some() || ac.probe_type("i128") {
-        autocfg::emit("has_i128");
-    }
 
     ac.emit_expression_cfg(
         "unsafe { 1f64.to_int_unchecked::<i32>() }",
@@ -3460,12 +3155,16 @@ fn main() {
 
     ac.emit_expression_cfg("1u32.reverse_bits()", "has_reverse_bits");
     ac.emit_expression_cfg("1u32.trailing_ones()", "has_leading_trailing_ones");
-    ac.emit_expression_cfg("{ let mut x = 1; x += &2; }", "has_int_assignop_ref");
     ac.emit_expression_cfg("1u32.div_euclid(1u32)", "has_div_euclid");
 
     if env::var_os("CARGO_FEATURE_STD").is_some() {
         ac.emit_expression_cfg("1f64.copysign(-1f64)", "has_copysign");
     }
+    ac.emit_expression_cfg("1f64.is_subnormal()", "has_is_subnormal");
+    ac.emit_expression_cfg("1f64.total_cmp(&2f64)", "has_total_cmp");
+
+    ac.emit_expression_cfg("1u32.to_ne_bytes()", "has_int_to_from_bytes");
+    ac.emit_expression_cfg("3.14f64.to_ne_bytes()", "has_float_to_from_bytes");
 
     autocfg::rerun_path("build.rs");
 }
@@ -3485,14 +3184,19 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-========== build.rs from packed_simd_2-0.3.7 ============================================================
+========== build.rs from orbclient-0.3.47 ============================================================
+fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS") == Ok("macos".to_string()) {
+        println!("cargo:rustc-link-lib=framework=CoreHaptics");
+    }
+}========== build.rs from packed_simd_2-0.3.8 ============================================================
 fn main() {
     let target = std::env::var("TARGET").expect("TARGET environment variable not defined");
     if target.contains("neon") {
         println!("cargo:rustc-cfg=libcore_neon");
     }
 }
-========== build.rs from packed_struct-0.10.0 ============================================================
+========== build.rs from packed_struct-0.10.1 ============================================================
 // build.rs
 
 use std::env;
@@ -3525,7 +3229,7 @@ fn main() {
         });
         f.write_all(b.as_bytes()).unwrap();
     }
-}========== build.rs from parking_lot_core-0.9.8 ============================================================
+}========== build.rs from parking_lot_core-0.9.9 ============================================================
 // Automatically detect tsan in a way that's compatible with both stable (which
 // doesn't support sanitizers) and nightly (which does). Works because build
 // scripts gets `cfg` info, even if the cfg is unstable.
@@ -3536,7 +3240,7 @@ fn main() {
         println!("cargo:rustc-cfg=tsan_enabled");
     }
 }
-========== build.rs from paste-1.0.12 ============================================================
+========== build.rs from paste-1.0.14 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -3592,7 +3296,7 @@ fn main() {
         println!("cargo:rustc-cfg=always_assert_unwind");
     }
 }
-========== build.rs from proc-macro-hack-0.5.19 ============================================================
+========== build.rs from proc-macro-hack-0.5.20+deprecated ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -3624,7 +3328,7 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from proc-macro2-1.0.63 ============================================================
+========== build.rs from proc-macro2-1.0.78 ============================================================
 // rustc-cfg emitted by the build script:
 //
 // "wrap_proc_macro"
@@ -3662,22 +3366,14 @@ fn rustc_minor_version() -> Option<u32> {
 //     1.57+.
 
 use std::env;
-use std::process::{self, Command};
+use std::ffi::OsString;
+use std::path::Path;
+use std::process::{self, Command, Stdio};
 use std::str;
 use std::u32;
 
 fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let version = rustc_version().unwrap_or(RustcVersion {
-        minor: u32::MAX,
-        nightly: false,
-    });
-
-    if version.minor < 31 {
-        eprintln!("Minimum supported rustc version is 1.31");
-        process::exit(1);
-    }
+    let rustc = rustc_minor_version().unwrap_or(u32::MAX);
 
     let docs_rs = env::var_os("DOCS_RS").is_some();
     let semver_exempt = cfg!(procmacro2_semver_exempt) || docs_rs;
@@ -3690,112 +3386,152 @@ fn main() {
         println!("cargo:rustc-cfg=span_locations");
     }
 
-    if version.minor < 32 {
-        println!("cargo:rustc-cfg=no_libprocmacro_unwind_safe");
-    }
-
-    if version.minor < 34 {
-        println!("cargo:rustc-cfg=no_try_from");
-    }
-
-    if version.minor < 39 {
-        println!("cargo:rustc-cfg=no_bind_by_move_pattern_guard");
-    }
-
-    if version.minor < 44 {
-        println!("cargo:rustc-cfg=no_lexerror_display");
-    }
-
-    if version.minor < 45 {
-        println!("cargo:rustc-cfg=no_hygiene");
-    }
-
-    if version.minor < 47 {
-        println!("cargo:rustc-cfg=no_ident_new_raw");
-    }
-
-    if version.minor < 54 {
-        println!("cargo:rustc-cfg=no_literal_from_str");
-    }
-
-    if version.minor < 55 {
-        println!("cargo:rustc-cfg=no_group_open_close");
-    }
-
-    if version.minor < 57 {
+    if rustc < 57 {
         println!("cargo:rustc-cfg=no_is_available");
     }
 
-    if version.minor < 66 {
+    if rustc < 66 {
         println!("cargo:rustc-cfg=no_source_text");
     }
 
     if !cfg!(feature = "proc-macro") {
+        println!("cargo:rerun-if-changed=build.rs");
         return;
     }
 
-    if version.nightly || !semver_exempt {
+    println!("cargo:rerun-if-changed=build/probe.rs");
+
+    let proc_macro_span;
+    let consider_rustc_bootstrap;
+    if compile_probe(false) {
+        // This is a nightly or dev compiler, so it supports unstable features
+        // regardless of RUSTC_BOOTSTRAP. No need to rerun build script if
+        // RUSTC_BOOTSTRAP is changed.
+        proc_macro_span = true;
+        consider_rustc_bootstrap = false;
+    } else if let Some(rustc_bootstrap) = env::var_os("RUSTC_BOOTSTRAP") {
+        if compile_probe(true) {
+            // This is a stable or beta compiler for which the user has set
+            // RUSTC_BOOTSTRAP to turn on unstable features. Rerun build script
+            // if they change it.
+            proc_macro_span = true;
+            consider_rustc_bootstrap = true;
+        } else if rustc_bootstrap == "1" {
+            // This compiler does not support the proc macro Span API in the
+            // form that proc-macro2 expects. No need to pay attention to
+            // RUSTC_BOOTSTRAP.
+            proc_macro_span = false;
+            consider_rustc_bootstrap = false;
+        } else {
+            // This is a stable or beta compiler for which RUSTC_BOOTSTRAP is
+            // set to restrict the use of unstable features by this crate.
+            proc_macro_span = false;
+            consider_rustc_bootstrap = true;
+        }
+    } else {
+        // Without RUSTC_BOOTSTRAP, this compiler does not support the proc
+        // macro Span API in the form that proc-macro2 expects, but try again if
+        // the user turns on unstable features.
+        proc_macro_span = false;
+        consider_rustc_bootstrap = true;
+    }
+
+    if proc_macro_span || !semver_exempt {
         println!("cargo:rustc-cfg=wrap_proc_macro");
     }
 
-    if version.nightly && feature_allowed("proc_macro_span") {
+    if proc_macro_span {
         println!("cargo:rustc-cfg=proc_macro_span");
     }
 
-    if semver_exempt && version.nightly {
+    if semver_exempt && proc_macro_span {
         println!("cargo:rustc-cfg=super_unstable");
+    }
+
+    if consider_rustc_bootstrap {
+        println!("cargo:rerun-if-env-changed=RUSTC_BOOTSTRAP");
     }
 }
 
-struct RustcVersion {
-    minor: u32,
-    nightly: bool,
+fn compile_probe(rustc_bootstrap: bool) -> bool {
+    if env::var_os("RUSTC_STAGE").is_some() {
+        // We are running inside rustc bootstrap. This is a highly non-standard
+        // environment with issues such as:
+        //
+        //     https://github.com/rust-lang/cargo/issues/11138
+        //     https://github.com/rust-lang/rust/issues/114839
+        //
+        // Let's just not use nightly features here.
+        return false;
+    }
+
+    let rustc = cargo_env_var("RUSTC");
+    let out_dir = cargo_env_var("OUT_DIR");
+    let probefile = Path::new("build").join("probe.rs");
+
+    // Make sure to pick up Cargo rustc configuration.
+    let mut cmd = if let Some(wrapper) = env::var_os("RUSTC_WRAPPER") {
+        let mut cmd = Command::new(wrapper);
+        // The wrapper's first argument is supposed to be the path to rustc.
+        cmd.arg(rustc);
+        cmd
+    } else {
+        Command::new(rustc)
+    };
+
+    if !rustc_bootstrap {
+        cmd.env_remove("RUSTC_BOOTSTRAP");
+    }
+
+    cmd.stderr(Stdio::null())
+        .arg("--edition=2021")
+        .arg("--crate-name=proc_macro2")
+        .arg("--crate-type=lib")
+        .arg("--emit=dep-info,metadata")
+        .arg("--out-dir")
+        .arg(out_dir)
+        .arg(probefile);
+
+    if let Some(target) = env::var_os("TARGET") {
+        cmd.arg("--target").arg(target);
+    }
+
+    // If Cargo wants to set RUSTFLAGS, use that.
+    if let Ok(rustflags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
+        if !rustflags.is_empty() {
+            for arg in rustflags.split('\x1f') {
+                cmd.arg(arg);
+            }
+        }
+    }
+
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
 }
 
-fn rustc_version() -> Option<RustcVersion> {
-    let rustc = env::var_os("RUSTC")?;
+fn rustc_minor_version() -> Option<u32> {
+    let rustc = cargo_env_var("RUSTC");
     let output = Command::new(rustc).arg("--version").output().ok()?;
     let version = str::from_utf8(&output.stdout).ok()?;
-    let nightly = version.contains("nightly") || version.contains("dev");
     let mut pieces = version.split('.');
     if pieces.next() != Some("rustc 1") {
         return None;
     }
-    let minor = pieces.next()?.parse().ok()?;
-    Some(RustcVersion { minor, nightly })
+    pieces.next()?.parse().ok()
 }
 
-fn feature_allowed(feature: &str) -> bool {
-    // Recognized formats:
-    //
-    //     -Z allow-features=feature1,feature2
-    //
-    //     -Zallow-features=feature1,feature2
-
-    let flags_var;
-    let flags_var_string;
-    let flags = if let Some(encoded_rustflags) = env::var_os("CARGO_ENCODED_RUSTFLAGS") {
-        flags_var = encoded_rustflags;
-        flags_var_string = flags_var.to_string_lossy();
-        flags_var_string.split('\x1f')
-    } else {
-        return true;
-    };
-
-    for mut flag in flags {
-        if flag.starts_with("-Z") {
-            flag = &flag["-Z".len()..];
-        }
-        if flag.starts_with("allow-features=") {
-            flag = &flag["allow-features=".len()..];
-            return flag.split(',').any(|allowed| allowed == feature);
-        }
-    }
-
-    // No allow-features= flag, allowed by default.
-    true
+fn cargo_env_var(key: &str) -> OsString {
+    env::var_os(key).unwrap_or_else(|| {
+        eprintln!(
+            "Environment variable ${} is not set during execution of build script",
+            key,
+        );
+        process::exit(1);
+    })
 }
-========== build.rs from protobuf-3.1.0 ============================================================
+========== build.rs from protobuf-3.3.0 ============================================================
 use std::env;
 use std::env::VarError;
 use std::fs::File;
@@ -3889,46 +3625,7 @@ fn main() {
     cfg_serde();
     write_version();
 }
-========== build.rs from quote-1.0.29 ============================================================
-use std::env;
-use std::process::{self, Command};
-use std::str;
-
-fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let version = match rustc_version() {
-        Some(version) => version,
-        None => return,
-    };
-
-    if version.minor < 31 {
-        eprintln!("Minimum supported rustc version is 1.31");
-        process::exit(1);
-    }
-
-    if version.minor < 53 {
-        // https://github.com/rust-lang/rust/issues/43081
-        println!("cargo:rustc-cfg=needs_invalid_span_workaround");
-    }
-}
-
-struct RustcVersion {
-    minor: u32,
-}
-
-fn rustc_version() -> Option<RustcVersion> {
-    let rustc = env::var_os("RUSTC")?;
-    let output = Command::new(rustc).arg("--version").output().ok()?;
-    let version = str::from_utf8(&output.stdout).ok()?;
-    let mut pieces = version.split('.');
-    if pieces.next() != Some("rustc 1") {
-        return None;
-    }
-    let minor = pieces.next()?.parse().ok()?;
-    Some(RustcVersion { minor })
-}
-========== build.rs from radium-0.6.2 ============================================================
+========== build.rs from radium-0.7.0 ============================================================
 //! Target detection
 //!
 //! This build script translates the target for which `radium` is being compiled
@@ -3955,6 +3652,8 @@ fn rustc_version() -> Option<RustcVersion> {
 //!
 //! Once any of these becomes usable on the stable series, we can switch to a
 //! set of `cfg` checks instead of a build script.
+
+use std::{env, error::Error};
 
 /// Collection of flags indicating whether the target processor supports atomic
 /// instructions for a certain width.
@@ -3989,10 +3688,10 @@ impl Atomics {
     };
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let mut atomics = Atomics::ALL;
 
-    let target = std::env::var("TARGET")?;
+    let target = env::var("TARGET")?;
     // Add new target strings here with their atomic availability.
     #[allow(clippy::match_single_binding, clippy::single_match)]
     match &*target {
@@ -4000,12 +3699,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    let arch = target.split('-').next().ok_or("Invalid target triple")?;
+    // If for some reason splitting fails, use the whole target string.
+    let tgt_arch = target.split("-").next().unwrap_or(&target);
+    // Additionally, the `cfg!(target_arch)` value may be of use for some
+    // targets. Note that it does **not** carry distinguishing information in
+    // all cases! `armv5te` and `armv7` targets are both
+    // `cfg!(target_arch = "arm")`.
+    let env_arch = env::var("CARGO_CFG_TARGET_ARCH")?;
     // Add new architecture sections here with their atomic availability.
     #[allow(clippy::match_single_binding, clippy::single_match)]
-    match arch {
+    match tgt_arch {
         "armv5te" | "mips" | "mipsel" | "powerpc" | "riscv32imac" | "thumbv7em" | "thumbv7m"
-        | "thumbv8m.main" | "armebv7r" | "armv7r" => atomics.has_64 = false,
+        | "thumbv8m.base" | "thumbv8m.main" | "armebv7r" | "armv7r" => atomics.has_64 = false,
         // These ARMv7 targets have 32-bit pointers and 64-bit atomics.
         "armv7" | "armv7a" | "armv7s" => atomics.has_64 = true,
         // "riscv32imc-unknown-none-elf" and "riscv32imac-unknown-none-elf" are
@@ -4013,6 +3718,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // distinction. As such, the non-atomic RISC-V targets must be
         // discovered here.
         "riscv32i" | "riscv32imc" | "thumbv6m" => atomics = Atomics::NONE,
+        _ => {}
+    }
+    #[allow(clippy::match_single_binding, clippy::single_match)]
+    match &*env_arch {
+        "avr" => atomics = Atomics::NONE,
         _ => {}
     }
 
@@ -4034,62 +3744,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-========== build.rs from rayon-1.5.3 ============================================================
-fn main() {
-    let ac = autocfg::new();
-    if ac.probe_expression("(0..10).step_by(2).rev()") {
-        autocfg::emit("has_step_by_rev");
-    }
-    if ac.probe_expression("{ fn _foo<const N: usize>() {} }") {
-        autocfg::emit("has_min_const_generics");
-    }
-    if ac.probe_path("std::ops::ControlFlow") {
-        autocfg::emit("has_control_flow");
-    }
-}
-========== build.rs from rayon-core-1.9.3 ============================================================
+========== build.rs from rayon-core-1.12.1 ============================================================
 // We need a build script to use `link = "rayon-core"`.  But we're not
 // *actually* linking to anything, just making sure that we're the only
 // rayon-core in use.
 fn main() {
     // we don't need to rebuild for anything else
     println!("cargo:rerun-if-changed=build.rs");
-}
-========== build.rs from riscv-0.7.0 ============================================================
-extern crate riscv_target;
-
-use riscv_target::Target;
-use std::path::PathBuf;
-use std::{env, fs};
-
-fn main() {
-    let target = env::var("TARGET").unwrap();
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let name = env::var("CARGO_PKG_NAME").unwrap();
-
-    if target.starts_with("riscv") && env::var_os("CARGO_FEATURE_INLINE_ASM").is_none() {
-        let mut target = Target::from_target_str(&target);
-        target.retain_extensions("ifdc");
-
-        let target = target.to_string();
-
-        fs::copy(
-            format!("bin/{}.a", target),
-            out_dir.join(format!("lib{}.a", name)),
-        )
-        .unwrap();
-
-        println!("cargo:rustc-link-lib=static={}", name);
-        println!("cargo:rustc-link-search={}", out_dir.display());
-    }
-
-    if target.starts_with("riscv32") {
-        println!("cargo:rustc-cfg=riscv");
-        println!("cargo:rustc-cfg=riscv32");
-    } else if target.starts_with("riscv64") {
-        println!("cargo:rustc-cfg=riscv");
-        println!("cargo:rustc-cfg=riscv64");
-    }
 }
 ========== build.rs from rkyv-0.4.3 ============================================================
 use std::env;
@@ -4115,34 +3776,24 @@ fn main() {
         println!("cargo:rustc-cfg=rkyv_atomic");
     }
 }
-========== build.rs from rustix-0.38.4 ============================================================
+========== build.rs from rustix-0.38.31 ============================================================
 use std::env::var;
 use std::io::Write;
 
 /// The directory for inline asm.
-const ASM_PATH: &str = "src/backend/linux_raw/arch/asm";
+const ASM_PATH: &str = "src/backend/linux_raw/arch";
 
 fn main() {
     // Don't rerun this on changes other than build.rs, as we only depend on
     // the rustc version.
     println!("cargo:rerun-if-changed=build.rs");
 
-    use_feature_or_nothing("rustc_attrs");
-
-    // Features only used in no-std configurations.
-    #[cfg(not(feature = "std"))]
-    {
-        use_feature_or_nothing("core_c_str");
-        use_feature_or_nothing("core_ffi_c");
-        use_feature_or_nothing("alloc_c_string");
-        use_feature_or_nothing("alloc_ffi");
-    }
-
     // Gather target information.
     let arch = var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let env = var("CARGO_CFG_TARGET_ENV").unwrap();
     let inline_asm_name = format!("{}/{}.rs", ASM_PATH, arch);
     let inline_asm_name_present = std::fs::metadata(inline_asm_name).is_ok();
-    let target_os = var("CARGO_CFG_TARGET_OS").unwrap();
+    let os = var("CARGO_CFG_TARGET_OS").unwrap();
     let pointer_width = var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
     let endian = var("CARGO_CFG_TARGET_ENDIAN").unwrap();
 
@@ -4150,8 +3801,8 @@ fn main() {
     let is_x32 = arch == "x86_64" && pointer_width == "32";
     let is_arm64_ilp32 = arch == "aarch64" && pointer_width == "32";
     let is_powerpc64be = arch == "powerpc64" && endian == "big";
-    let is_mipseb = arch == "mips" && endian == "big";
-    let is_mips64eb = arch == "mips64" && endian == "big";
+    let is_mipseb = (arch == "mips" || arch == "mips32r6") && endian == "big";
+    let is_mips64eb = arch.contains("mips64") && endian == "big";
     let is_unsupported_abi = is_x32 || is_arm64_ilp32 || is_powerpc64be || is_mipseb || is_mips64eb;
 
     // Check for `--features=use-libc`. This allows crate users to enable the
@@ -4162,6 +3813,16 @@ fn main() {
     // enable the libc backend even if rustix is depended on transitively.
     let cfg_use_libc = var("CARGO_CFG_RUSTIX_USE_LIBC").is_ok();
 
+    // Check for `--features=rustc-dep-of-std`.
+    let rustc_dep_of_std = var("CARGO_FEATURE_RUSTC_DEP_OF_STD").is_ok();
+
+    // Check for eg. `RUSTFLAGS=--cfg=rustix_use_experimental_features`. This
+    // is a rustc flag rather than a cargo feature flag because it's
+    // experimental and not something we want accidentally enabled via
+    // `--all-features`.
+    let rustix_use_experimental_features =
+        var("CARGO_CFG_RUSTIX_USE_EXPERIMENTAL_FEATURES").is_ok();
+
     // Check for eg. `RUSTFLAGS=--cfg=rustix_use_experimental_asm`. This is a
     // rustc flag rather than a cargo feature flag because it's experimental
     // and not something we want accidentally enabled via `--all-features`.
@@ -4171,27 +3832,54 @@ fn main() {
     // libc FFI calls, so if we're running under miri, use the libc backend.
     let miri = var("CARGO_CFG_MIRI").is_ok();
 
+    // If experimental features are enabled, auto-detect and use available
+    // features.
+    if rustc_dep_of_std {
+        use_feature("rustc_attrs");
+        use_feature("core_intrinsics");
+    } else if rustix_use_experimental_features {
+        use_feature_or_nothing("rustc_attrs");
+        use_feature_or_nothing("core_intrinsics");
+    }
+
+    // Features needed only in no-std configurations.
+    #[cfg(not(feature = "std"))]
+    {
+        use_feature_or_nothing("core_c_str");
+        use_feature_or_nothing("core_ffi_c");
+        use_feature_or_nothing("alloc_c_string");
+        use_feature_or_nothing("alloc_ffi");
+    }
+
+    // Feature needed for testing.
+    if use_static_assertions() {
+        use_feature("static_assertions");
+    }
+
+    // WASI support can utilize wasi_ext if present.
+    if os == "wasi" {
+        use_feature_or_nothing("wasi_ext");
+    }
+
     // If the libc backend is requested, or if we're not on a platform for
     // which we have linux_raw support, use the libc backend.
     //
     // For now Android uses the libc backend; in theory it could use the
     // linux_raw backend, but to do that we'll need to figure out how to
     // install the toolchain for it.
-    if feature_use_libc
+    let libc = feature_use_libc
         || cfg_use_libc
-        || target_os != "linux"
+        || os != "linux"
         || !inline_asm_name_present
         || is_unsupported_abi
         || miri
-        || ((arch == "powerpc64" || arch == "mips" || arch == "mips64")
-            && !rustix_use_experimental_asm)
-    {
+        || ((arch == "powerpc64" || arch.starts_with("mips")) && !rustix_use_experimental_asm);
+    if libc {
         // Use the libc backend.
         use_feature("libc");
     } else {
         // Use the linux_raw backend.
         use_feature("linux_raw");
-        use_feature_or_nothing("core_intrinsics");
         if rustix_use_experimental_asm {
             use_feature("asm_experimental_arch");
         }
@@ -4204,44 +3892,50 @@ fn main() {
 
     // Rust's libc crate groups some OS's together which have similar APIs;
     // create similarly-named features to make `cfg` tests more concise.
-    if target_os == "freebsd" || target_os == "dragonfly" {
+    let freebsdlike = os == "freebsd" || os == "dragonfly";
+    if freebsdlike {
         use_feature("freebsdlike");
     }
-    if target_os == "openbsd" || target_os == "netbsd" {
+    let netbsdlike = os == "openbsd" || os == "netbsd";
+    if netbsdlike {
         use_feature("netbsdlike");
     }
-    if target_os == "macos" || target_os == "ios" || target_os == "tvos" || target_os == "watchos" {
+    let apple = os == "macos" || os == "ios" || os == "tvos" || os == "watchos";
+    if apple {
         use_feature("apple");
     }
-    if target_os == "linux"
-        || target_os == "l4re"
-        || target_os == "android"
-        || target_os == "emscripten"
-    {
+    if os == "linux" || os == "l4re" || os == "android" || os == "emscripten" {
         use_feature("linux_like");
     }
-    if target_os == "solaris" || target_os == "illumos" {
+    if os == "solaris" || os == "illumos" {
         use_feature("solarish");
     }
-    if target_os == "macos"
-        || target_os == "ios"
-        || target_os == "tvos"
-        || target_os == "watchos"
-        || target_os == "freebsd"
-        || target_os == "dragonfly"
-        || target_os == "openbsd"
-        || target_os == "netbsd"
-    {
+    if apple || freebsdlike || netbsdlike {
         use_feature("bsd");
     }
 
     // Add some additional common target combinations.
-    if target_os == "android" || target_os == "linux" {
+
+    // Android and "regular" Linux both use the Linux kernel.
+    if os == "android" || os == "linux" {
         use_feature("linux_kernel");
     }
 
-    if target_os == "wasi" {
-        use_feature_or_nothing("wasi_ext");
+    // These platforms have a 32-bit `time_t`.
+    if libc
+        && (arch == "arm"
+            || arch == "mips"
+            || arch == "sparc"
+            || arch == "x86"
+            || (arch == "wasm32" && os == "emscripten"))
+        && (apple
+            || os == "android"
+            || os == "emscripten"
+            || os == "haiku"
+            || env == "gnu"
+            || (env == "musl" && arch == "x86"))
+    {
+        use_feature("fix_y2038");
     }
 
     println!("cargo:rerun-if-env-changed=CARGO_CFG_RUSTIX_USE_EXPERIMENTAL_ASM");
@@ -4252,6 +3946,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_USE_LIBC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_RUSTC_DEP_OF_STD");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_MIRI");
+}
+
+fn use_static_assertions() -> bool {
+    // `offset_from` was made const in Rust 1.65.
+    can_compile("const unsafe fn foo(p: *const u8) -> isize { p.offset_from(p) }")
 }
 
 fn use_thumb_mode() -> bool {
@@ -4328,7 +4027,7 @@ fn can_compile<T: AsRef<str>>(test: T) -> bool {
 
     child.wait().unwrap().success()
 }
-========== build.rs from rustls-0.21.7 ============================================================
+========== build.rs from rustls-0.22.2 ============================================================
 /// This build script allows us to enable the `read_buf` language feature only
 /// for Rust Nightly.
 ///
@@ -5252,12 +4951,14 @@ fn generate_bindings(target: &str, host: &str, headers_paths: &[String]) {
 fn get_os_from_triple(triple: &str) -> Option<&str> {
     triple.splitn(3, "-").nth(2)
 }
-========== build.rs from semver-1.0.9 ============================================================
+========== build.rs from semver-1.0.21 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
     let compiler = match rustc_minor_version() {
         Some(compiler) => compiler,
         None => return,
@@ -5290,7 +4991,7 @@ fn main() {
 
     if compiler < 45 {
         // String::strip_prefix.
-        // https://doc.rust-lang.org/std/primitive.str.html#method.repeat
+        // https://doc.rust-lang.org/std/primitive.str.html#method.strip_prefix
         println!("cargo:rustc-cfg=no_str_strip_prefix");
     }
 
@@ -5326,7 +5027,7 @@ fn rustc_minor_version() -> Option<u32> {
     }
     pieces.next()?.parse().ok()
 }
-========== build.rs from serde-1.0.168 ============================================================
+========== build.rs from serde-1.0.196 ============================================================
 use std::env;
 use std::process::Command;
 use std::str::{self, FromStr};
@@ -5345,68 +5046,6 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let emscripten = target == "asmjs-unknown-emscripten" || target == "wasm32-unknown-emscripten";
 
-    // std::collections::Bound was stabilized in Rust 1.17
-    // but it was moved to core::ops later in Rust 1.26:
-    // https://doc.rust-lang.org/core/ops/enum.Bound.html
-    if minor < 26 {
-        println!("cargo:rustc-cfg=no_ops_bound");
-        if minor < 17 {
-            println!("cargo:rustc-cfg=no_collections_bound");
-        }
-    }
-
-    // core::cmp::Reverse stabilized in Rust 1.19:
-    // https://doc.rust-lang.org/stable/core/cmp/struct.Reverse.html
-    if minor < 19 {
-        println!("cargo:rustc-cfg=no_core_reverse");
-    }
-
-    // CString::into_boxed_c_str and PathBuf::into_boxed_path stabilized in Rust 1.20:
-    // https://doc.rust-lang.org/std/ffi/struct.CString.html#method.into_boxed_c_str
-    // https://doc.rust-lang.org/std/path/struct.PathBuf.html#method.into_boxed_path
-    if minor < 20 {
-        println!("cargo:rustc-cfg=no_de_boxed_c_str");
-        println!("cargo:rustc-cfg=no_de_boxed_path");
-    }
-
-    // From<Box<T>> for Rc<T> / Arc<T> stabilized in Rust 1.21:
-    // https://doc.rust-lang.org/std/rc/struct.Rc.html#impl-From<Box<T>>
-    // https://doc.rust-lang.org/std/sync/struct.Arc.html#impl-From<Box<T>>
-    if minor < 21 {
-        println!("cargo:rustc-cfg=no_de_rc_dst");
-    }
-
-    // Duration available in core since Rust 1.25:
-    // https://blog.rust-lang.org/2018/03/29/Rust-1.25.html#library-stabilizations
-    if minor < 25 {
-        println!("cargo:rustc-cfg=no_core_duration");
-    }
-
-    // 128-bit integers stabilized in Rust 1.26:
-    // https://blog.rust-lang.org/2018/05/10/Rust-1.26.html
-    //
-    // Disabled on Emscripten targets before Rust 1.40 since
-    // Emscripten did not support 128-bit integers until Rust 1.40
-    // (https://github.com/rust-lang/rust/pull/65251)
-    if minor < 26 || emscripten && minor < 40 {
-        println!("cargo:rustc-cfg=no_integer128");
-    }
-
-    // Inclusive ranges methods stabilized in Rust 1.27:
-    // https://github.com/rust-lang/rust/pull/50758
-    // Also Iterator::try_for_each:
-    // https://blog.rust-lang.org/2018/06/21/Rust-1.27.html#library-stabilizations
-    if minor < 27 {
-        println!("cargo:rustc-cfg=no_range_inclusive");
-        println!("cargo:rustc-cfg=no_iterator_try_fold");
-    }
-
-    // Non-zero integers stabilized in Rust 1.28:
-    // https://blog.rust-lang.org/2018/08/02/Rust-1.28.html#library-stabilizations
-    if minor < 28 {
-        println!("cargo:rustc-cfg=no_num_nonzero");
-    }
-
     // TryFrom, Atomic types, non-zero signed integers, and SystemTime::checked_add
     // stabilized in Rust 1.34:
     // https://blog.rust-lang.org/2019/04/11/Rust-1.34.0.html#tryfrom-and-tryinto
@@ -5416,6 +5055,12 @@ fn main() {
         println!("cargo:rustc-cfg=no_num_nonzero_signed");
         println!("cargo:rustc-cfg=no_systemtime_checked_add");
         println!("cargo:rustc-cfg=no_relaxed_trait_bounds");
+    }
+
+    // f32::copysign and f64::copysign stabilized in Rust 1.35.
+    // https://blog.rust-lang.org/2019/05/23/Rust-1.35.0.html#copy-the-sign-of-a-floating-point-number-onto-another
+    if minor < 35 {
+        println!("cargo:rustc-cfg=no_float_copysign");
     }
 
     // Current minimum supported version of serde_derive crate is Rust 1.56.
@@ -5479,7 +5124,7 @@ fn rustc_minor_version() -> Option<u32> {
 
     u32::from_str(next).ok()
 }
-========== build.rs from serde_json-1.0.107 ============================================================
+========== build.rs from serde_json-1.0.113 ============================================================
 use std::env;
 
 fn main() {
@@ -5489,12 +5134,37 @@ fn main() {
     // src/lexical/math.rs for where this has an effect.
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     match target_arch.as_str() {
-        "aarch64" | "mips64" | "powerpc64" | "x86_64" => {
+        "aarch64" | "mips64" | "powerpc64" | "x86_64" | "loongarch64" => {
             println!("cargo:rustc-cfg=limb_width_64");
         }
         _ => {
             println!("cargo:rustc-cfg=limb_width_32");
         }
+    }
+}
+========== build.rs from slab-0.4.9 ============================================================
+fn main() {
+    let cfg = match autocfg::AutoCfg::new() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            // If we couldn't detect the compiler version and features, just
+            // print a warning. This isn't a fatal error: we can still build
+            // Slab, we just can't enable cfgs automatically.
+            println!(
+                "cargo:warning=slab: failed to detect compiler features: {}",
+                e
+            );
+            return;
+        }
+    };
+    // Note that this is `no_`*, not `has_*`. This allows treating as the latest
+    // stable rustc is used when the build script doesn't run. This is useful
+    // for non-cargo build systems that don't run the build script.
+    if !cfg.probe_rustc_version(1, 39) {
+        println!("cargo:rustc-cfg=slab_no_const_vec_new");
+    }
+    if !cfg.probe_rustc_version(1, 46) {
+        println!("cargo:rustc-cfg=slab_no_track_caller");
     }
 }
 ========== build.rs from smoltcp-0.11.0 ============================================================
@@ -5602,7 +5272,7 @@ fn main() {
     let out_file = out_dir.join("config.rs").to_string_lossy().to_string();
     fs::write(out_file, data).unwrap();
 }
-========== build.rs from syn-1.0.103 ============================================================
+========== build.rs from syn-1.0.109 ============================================================
 use std::env;
 use std::process::Command;
 use std::str;
@@ -5653,6 +5323,126 @@ fn rustc_version() -> Option<Compiler> {
     let minor = pieces.next()?.parse().ok()?;
     let nightly = version.contains("nightly") || version.ends_with("-dev");
     Some(Compiler { minor, nightly })
+}
+========== build.rs from thiserror-1.0.56 ============================================================
+use std::env;
+use std::ffi::OsString;
+use std::path::Path;
+use std::process::{self, Command, Stdio};
+
+fn main() {
+    println!("cargo:rerun-if-changed=build/probe.rs");
+
+    let error_generic_member_access;
+    let consider_rustc_bootstrap;
+    if compile_probe(false) {
+        // This is a nightly or dev compiler, so it supports unstable features
+        // regardless of RUSTC_BOOTSTRAP. No need to rerun build script if
+        // RUSTC_BOOTSTRAP is changed.
+        error_generic_member_access = true;
+        consider_rustc_bootstrap = false;
+    } else if let Some(rustc_bootstrap) = env::var_os("RUSTC_BOOTSTRAP") {
+        if compile_probe(true) {
+            // This is a stable or beta compiler for which the user has set
+            // RUSTC_BOOTSTRAP to turn on unstable features. Rerun build script
+            // if they change it.
+            error_generic_member_access = true;
+            consider_rustc_bootstrap = true;
+        } else if rustc_bootstrap == "1" {
+            // This compiler does not support the generic member access API in
+            // the form that thiserror expects. No need to pay attention to
+            // RUSTC_BOOTSTRAP.
+            error_generic_member_access = false;
+            consider_rustc_bootstrap = false;
+        } else {
+            // This is a stable or beta compiler for which RUSTC_BOOTSTRAP is
+            // set to restrict the use of unstable features by this crate.
+            error_generic_member_access = false;
+            consider_rustc_bootstrap = true;
+        }
+    } else {
+        // Without RUSTC_BOOTSTRAP, this compiler does not support the generic
+        // member access API in the form that thiserror expects, but try again
+        // if the user turns on unstable features.
+        error_generic_member_access = false;
+        consider_rustc_bootstrap = true;
+    }
+
+    if error_generic_member_access {
+        println!("cargo:rustc-cfg=error_generic_member_access");
+    }
+
+    if consider_rustc_bootstrap {
+        println!("cargo:rerun-if-env-changed=RUSTC_BOOTSTRAP");
+    }
+}
+
+fn compile_probe(rustc_bootstrap: bool) -> bool {
+    if env::var_os("RUSTC_STAGE").is_some() {
+        // We are running inside rustc bootstrap. This is a highly non-standard
+        // environment with issues such as:
+        //
+        //     https://github.com/rust-lang/cargo/issues/11138
+        //     https://github.com/rust-lang/rust/issues/114839
+        //
+        // Let's just not use nightly features here.
+        return false;
+    }
+
+    let rustc = cargo_env_var("RUSTC");
+    let out_dir = cargo_env_var("OUT_DIR");
+    let probefile = Path::new("build").join("probe.rs");
+
+    // Make sure to pick up Cargo rustc configuration.
+    let mut cmd = if let Some(wrapper) = env::var_os("RUSTC_WRAPPER") {
+        let mut cmd = Command::new(wrapper);
+        // The wrapper's first argument is supposed to be the path to rustc.
+        cmd.arg(rustc);
+        cmd
+    } else {
+        Command::new(rustc)
+    };
+
+    if !rustc_bootstrap {
+        cmd.env_remove("RUSTC_BOOTSTRAP");
+    }
+
+    cmd.stderr(Stdio::null())
+        .arg("--edition=2018")
+        .arg("--crate-name=thiserror")
+        .arg("--crate-type=lib")
+        .arg("--emit=dep-info,metadata")
+        .arg("--out-dir")
+        .arg(out_dir)
+        .arg(probefile);
+
+    if let Some(target) = env::var_os("TARGET") {
+        cmd.arg("--target").arg(target);
+    }
+
+    // If Cargo wants to set RUSTFLAGS, use that.
+    if let Ok(rustflags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
+        if !rustflags.is_empty() {
+            for arg in rustflags.split('\x1f') {
+                cmd.arg(arg);
+            }
+        }
+    }
+
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
+}
+
+fn cargo_env_var(key: &str) -> OsString {
+    env::var_os(key).unwrap_or_else(|| {
+        eprintln!(
+            "Environment variable ${} is not set during execution of build script",
+            key,
+        );
+        process::exit(1);
+    })
 }
 ========== build.rs from tiny-keccak-2.0.2 ============================================================
 #[cfg(not(any(
@@ -5717,12 +5507,12 @@ fn main() {
 
     println!("cargo:rerun-if-changed=no_atomic.rs");
 }
-========== build.rs from wasm-bindgen-0.2.80 ============================================================
+========== build.rs from wasm-bindgen-0.2.91 ============================================================
 // Empty `build.rs` so that `[package] links = ...` works in `Cargo.toml`.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
-========== build.rs from wasm-bindgen-shared-0.2.80 ============================================================
+========== build.rs from wasm-bindgen-shared-0.2.91 ============================================================
 use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::hash::Hasher;
@@ -5758,7 +5548,7 @@ fn set_schema_version_env_var() {
 
     println!("cargo:rustc-env=SCHEMA_FILE_HASH={}", hasher.finish());
 }
-========== build.rs from wayland-client-0.29.4 ============================================================
+========== build.rs from wayland-client-0.29.5 ============================================================
 extern crate wayland_scanner;
 
 use std::env::var;
@@ -5779,7 +5569,7 @@ fn main() {
         &[("wl_callback", "done")],
     );
 }
-========== build.rs from wayland-protocols-0.29.4 ============================================================
+========== build.rs from wayland-protocols-0.29.5 ============================================================
 extern crate wayland_scanner;
 
 use std::env::var;
@@ -5961,7 +5751,7 @@ fn main() {
         }
     }
 }
-========== build.rs from wayland-sys-0.29.4 ============================================================
+========== build.rs from wayland-sys-0.29.5 ============================================================
 use pkg_config::Config;
 
 fn main() {
@@ -6549,7 +6339,7 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", Path::new(&dir).join("lib").display());
     }
 }
-========== build.rs from windows_aarch64_gnullvm-0.48.0 ============================================================
+========== build.rs from windows_aarch64_gnullvm-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "aarch64-pc-windows-gnullvm" {
@@ -6560,7 +6350,18 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_aarch64_msvc-0.36.1 ============================================================
+========== build.rs from windows_aarch64_gnullvm-0.52.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "aarch64-pc-windows-gnullvm" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_aarch64_msvc-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "aarch64-pc-windows-msvc" && target != "aarch64-uwp-windows-msvc" {
@@ -6571,7 +6372,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_aarch64_msvc-0.48.0 ============================================================
+========== build.rs from windows_aarch64_msvc-0.52.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "aarch64-pc-windows-msvc" && target != "aarch64-uwp-windows-msvc" {
@@ -6582,7 +6383,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_i686_gnu-0.36.1 ============================================================
+========== build.rs from windows_i686_gnu-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "i686-pc-windows-gnu" && target != "i686-uwp-windows-gnu" {
@@ -6593,7 +6394,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_i686_gnu-0.48.0 ============================================================
+========== build.rs from windows_i686_gnu-0.52.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "i686-pc-windows-gnu" && target != "i686-uwp-windows-gnu" {
@@ -6604,7 +6405,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_i686_msvc-0.36.1 ============================================================
+========== build.rs from windows_i686_msvc-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "i686-pc-windows-msvc" && target != "i686-uwp-windows-msvc" {
@@ -6615,7 +6416,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_i686_msvc-0.48.0 ============================================================
+========== build.rs from windows_i686_msvc-0.52.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "i686-pc-windows-msvc" && target != "i686-uwp-windows-msvc" {
@@ -6626,7 +6427,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_x86_64_gnu-0.36.1 ============================================================
+========== build.rs from windows_x86_64_gnu-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-gnu" && target != "x86_64-uwp-windows-gnu" {
@@ -6637,7 +6438,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_x86_64_gnu-0.48.0 ============================================================
+========== build.rs from windows_x86_64_gnu-0.52.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-gnu" && target != "x86_64-uwp-windows-gnu" {
@@ -6648,7 +6449,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_x86_64_gnullvm-0.48.0 ============================================================
+========== build.rs from windows_x86_64_gnullvm-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-gnullvm" {
@@ -6659,7 +6460,18 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_x86_64_msvc-0.36.1 ============================================================
+========== build.rs from windows_x86_64_gnullvm-0.52.0 ============================================================
+fn main() {
+    let target = std::env::var("TARGET").unwrap();
+    if target != "x86_64-pc-windows-gnullvm" {
+        return;
+    }
+
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
+}
+========== build.rs from windows_x86_64_msvc-0.48.5 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-msvc" && target != "x86_64-uwp-windows-msvc" {
@@ -6670,7 +6482,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from windows_x86_64_msvc-0.48.0 ============================================================
+========== build.rs from windows_x86_64_msvc-0.52.0 ============================================================
 fn main() {
     let target = std::env::var("TARGET").unwrap();
     if target != "x86_64-pc-windows-msvc" && target != "x86_64-uwp-windows-msvc" {
@@ -6681,7 +6493,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", std::path::Path::new(&dir).join("lib").display());
 }
-========== build.rs from x11-dl-2.19.1 ============================================================
+========== build.rs from x11-dl-2.21.0 ============================================================
 // x11-rs: Rust bindings for X11 libraries
 // The X11 libraries are available under the MIT license.
 // These bindings are public domain.
@@ -6709,6 +6521,7 @@ fn main() {
         ("xrandr", "xrandr"),
         ("xtst", "xtst"),
         ("xrender", "xrender"),
+        ("xpresent", "xpresent"),
         ("xscrnsaver", "xscrnsaver"),
         ("xt", "xt"),
     ];
